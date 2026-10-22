@@ -4,9 +4,9 @@ Runnable examples for building applications with Microsoft Web IQ.
 
 ## Project status
 
-This repository is being prepared for its initial release. No samples have been
-published yet. The current content is documentation and repository configuration;
-it does not include third-party code.
+This repository is being prepared for its initial release. Samples do not include
+third-party code; each sample installs its dependencies from public package
+registries.
 
 ## Samples
 
@@ -23,7 +23,7 @@ run instructions, and validation steps.
 
 | Sample | Language | Description |
 |---|---|---|
-| _Coming soon_ | | |
+| [Web IQ + Foundry Voice Agent](samples/python/foundry-voice-agent/) | Python, TypeScript | Native Microsoft Foundry voice agent that decides when to search Web IQ news and shows cited sources after speaking. |
 
 ## Contributing
 

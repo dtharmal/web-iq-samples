@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appName": {"value": "<your-globally-unique-app-name>"},
+    "foundryAccountName": {"value": "<your-foundry-resource-name>"},
+    "foundryProjectName": {"value": "<your-foundry-project-name>"},
+    "agentName": {"value": "<your-voice-agent-name>"},
+    "agentVersion": {"value": "<your-voice-agent-version>"},
+    "allowedIpCidrs": {"value": []}
+  }
+}

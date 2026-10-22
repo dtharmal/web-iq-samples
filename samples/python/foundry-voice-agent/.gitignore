@@ -1,0 +1,18 @@
+# Local secrets and generated state. Never commit these.
+.env
+.foundry/
+.private-demo/
+.logs/
+.deploy/
+
+# Dependencies and build output
+.venv/
+node_modules/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+test-results/
+playwright-report/

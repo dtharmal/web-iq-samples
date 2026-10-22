@@ -1,0 +1,118 @@
+<!doctype html>
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+<html lang="en">
+<head>
+  <script>
+    (() => {
+      const param = new URLSearchParams(window.location.search).get("scoutTheme");
+      const theme =
+        param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="A live news briefing with native Microsoft Foundry voice and WebIQ-grounded sources." />
+  <title>Web IQ + Foundry Voice Agent</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Web IQ + Foundry Voice Agent home">
+        <span class="brand-mark" aria-hidden="true">w<span>i</span></span>
+        <h1 id="headline">Web IQ + Foundry Voice Agent</h1>
+      </a>
+      <button id="sign-out" class="end-button" hidden>Sign out</button>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="headline">
+        <p>Your personal news briefing, grounded in live WebIQ search.<br class="wide" /> Ask naturally. Interrupt anytime. Follow the evidence.</p>
+      </section>
+      <div id="setup" class="notice" hidden></div>
+      <div id="error" class="notice error" role="alert" hidden></div>
+      <div id="telemetry-notice" class="notice" role="status" hidden></div>
+      <div class="workspace">
+        <section class="conversation-panel card" aria-label="Voice conversation">
+          <div class="panel-heading">
+            <span id="status" class="status" role="status" hidden><span class="status-dot"></span><span id="status-label"></span></span>
+          </div>
+          <div id="voice-stage" class="voice-stage">
+            <div class="voice-disc" aria-hidden="true">
+              <div class="waveform" id="waveform"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <p id="voice-caption">Good questions deserve well-sourced answers.</p>
+            <div class="voice-actions">
+              <div id="session-actions" role="group" aria-label="Session controls" aria-busy="false">
+                <button id="start" class="primary">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
+                  Start speech mode
+                </button>
+                <div id="live-controls" class="live-controls" hidden>
+                  <button id="mute" class="secondary" aria-pressed="false">Mute microphone</button>
+                  <button id="interrupt" class="secondary">Stop speaking</button>
+                  <button id="end" class="end-button">End session</button>
+                </div>
+              </div>
+              <div id="connection-pending" class="connection-pending" hidden>
+                <div id="connection-status" class="connection-status" role="status" aria-live="polite" aria-atomic="true">
+                  <span>Connecting…</span>
+                  <span class="connecting-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                  <span id="connection-stage" class="sr-only">Preparing audio.</span>
+                </div>
+                <button id="cancel-connection" class="cancel-connection">Cancel connection</button>
+              </div>
+            </div>
+            <p class="micro-note" id="micro-note">Microphone permission required. Headphones recommended.</p>
+          </div>
+          <div class="suggestions" id="suggestions">
+            <span class="section-label">START WITH A QUESTION</span>
+            <div class="prompt-buttons">
+              <button data-prompt="What are the latest AI announcements from the past two days?">What's new in AI? <span aria-hidden="true">&#8599;</span></button>
+              <button data-prompt="Give me a quick briefing on today's top space news.">Today's space news <span aria-hidden="true">&#8599;</span></button>
+              <button data-prompt="What are the latest clean energy developments this week?">Clean energy this week <span aria-hidden="true">&#8599;</span></button>
+            </div>
+          </div>
+          <section class="transcript-section" aria-label="Conversation transcript">
+            <div class="transcript-heading"><span class="section-label">LIVE TRANSCRIPT</span><span id="session-clock">Not recording</span></div>
+            <div id="transcript" class="transcript" role="log" aria-live="polite" aria-relevant="additions text">
+              <div id="empty-transcript" class="empty-transcript">Your conversation will appear here. When the model searches, references follow completed audio playback.</div>
+            </div>
+          </section>
+          <form id="text-form" class="composer">
+            <label for="question" class="sr-only">Type a news question</label>
+            <input id="question" type="text" maxlength="1000" placeholder="Or type a question..." autocomplete="off" />
+            <button id="send" type="submit" aria-label="Send question">Ask <span aria-hidden="true">&#8593;</span></button>
+          </form>
+          <div class="composer-note">Text questions use the same voice agent and play a spoken answer.</div>
+        </section>
+        <aside class="sources-panel card" aria-label="WebIQ source evidence">
+          <section class="tool-activity" aria-labelledby="tool-activity-title">
+            <div class="tool-activity-heading">
+              <h2 id="tool-activity-title">Live tool activity</h2><span class="timing-badge">BACKEND CLOCK</span>
+            </div>
+            <p class="activity-scope" title="MCP call dispatch to SDK response receipt. Includes transport and MCP decoding; excludes connection setup, model generation, citation processing and audio.">WebIQ round-trip · excludes setup, model &amp; audio time</p>
+            <ol id="tool-activity-list" aria-label="Recent tool calls"></ol>
+            <p id="tool-activity-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+          </section>
+          <div class="source-heading"><h2>Live sources <span id="source-count">0</span></h2></div>
+          <div id="search-status" class="search-status">The model decides when WebIQ search is needed.</div>
+          <div id="source-list" class="source-list">
+            <div class="empty-sources">
+              <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="9" y="7" width="26" height="34" rx="4"/><path d="M16 17h12M16 24h12M16 31h7M35 15h4v25a4 4 0 0 1-4 4"/></svg>
+              <h3>Live evidence when the model searches.</h3>
+              <p>Real titles, publishers, and links from WebIQ. Select a source to read the original story.</p>
+            </div>
+          </div>
+          <div class="evidence-note"><span class="tiny-dot"></span><p>After audio playback, model-selected references appear beneath that answer. This is not independent fact-checking. Update and crawl dates are labeled, never presented as publication dates.</p></div>
+        </aside>
+      </div>
+      <footer>
+        <p>No recordings saved. Transcript stays in this tab. Audio and questions are sent to Azure; search queries go to WebIQ. AI answers can be wrong.</p>
+      </footer>
+    </main>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
