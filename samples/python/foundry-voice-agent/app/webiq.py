@@ -73,11 +73,13 @@ def optional_text(value: object, limit: int = 200) -> str | None:
 
 
 def parse_sources(payload: object, turn: int) -> list[Source]:
-    if not isinstance(payload, dict) or not isinstance(payload.get("newsResults"), list):
+    if (not isinstance(payload, dict) or "error" in payload or "errorCode" in payload
+            or not isinstance(payload.get("newsResults", []), list)):
         raise PublicError("webiq_schema", "WebIQ returned an unexpected response format.")
     sources: list[Source] = []
     seen: set[str] = set()
-    for entry in payload["newsResults"][:5]:
+    # Web IQ omits empty model collections, including newsResults.
+    for entry in payload.get("newsResults", [])[:5]:
         if not isinstance(entry, dict):
             raise PublicError("webiq_schema", "WebIQ returned an invalid result.")
         url = safe_url(entry.get("url"))
@@ -131,8 +133,8 @@ def mcp_error(exc: Exception) -> PublicError:
         status = exc.response.status_code
         message = {
             401: "WebIQ MCP rejected the API key. Update WEBIQ_API_KEY privately.",
-            403: "The WebIQ API key does not have MCP access.",
-            429: "WebIQ MCP is rate-limiting requests. Wait before trying again.",
+            403: "WebIQ denied access. Check AppID provisioning and News/MCP permissions.",
+            429: "WebIQ MCP hit a rate or daily quota limit. Check service retry guidance before trying again.",
         }.get(status, f"WebIQ MCP failed (HTTP {status}). No alternative search was used.")
         return PublicError(f"webiq_http_{status}", message)
     return PublicError("webiq_mcp", f"WebIQ MCP failed ({type(exc).__name__}). Please reconnect.")

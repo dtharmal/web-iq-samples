@@ -86,11 +86,27 @@ class Settings:
         if env.get("PERF_LOG_ENABLED", "1") not in {"0", "1"}:
             raise ValueError("PERF_LOG_ENABLED must be 0 or 1.")
         agent = json.loads(AGENT_FILE.read_text()) if not hosted and AGENT_FILE.exists() else {}
+        if not isinstance(agent, dict) or any(
+            not isinstance(agent.get(key, ""), str) for key in ("name", "version", "project_endpoint")
+        ):
+            raise ValueError("The recorded agent metadata must contain string name/version/project_endpoint fields.")
+        name = (env.get("FOUNDRY_VOICE_AGENT_NAME") or "").strip()
+        version = (env.get("FOUNDRY_VOICE_AGENT_VERSION") or "").strip()
+        if bool(name) != bool(version):
+            raise ValueError("Set FOUNDRY_VOICE_AGENT_NAME and FOUNDRY_VOICE_AGENT_VERSION together.")
+        endpoint = (env.get("FOUNDRY_PROJECT_ENDPOINT") or "").strip().rstrip("/")
+        if (not name and agent.get("project_endpoint")
+                and agent["project_endpoint"].rstrip("/") != endpoint):
+            raise ValueError(
+                "The recorded agent belongs to a different Foundry project. "
+                "Set explicit agent name/version for this project or move .foundry/agent.json aside "
+                "before running setup_agent for a new project."
+            )
         settings = cls(
-            project_endpoint=(env.get("FOUNDRY_PROJECT_ENDPOINT") or "").strip().rstrip("/"),
+            project_endpoint=endpoint,
             tenant_id=(env.get("AZURE_TENANT_ID") or "").strip(),
-            agent_name=env.get("FOUNDRY_VOICE_AGENT_NAME") or agent.get("name", ""),
-            agent_version=env.get("FOUNDRY_VOICE_AGENT_VERSION") or agent.get("version", ""),
+            agent_name=name or agent.get("name", ""),
+            agent_version=version or agent.get("version", ""),
             webiq_endpoint=env.get("WEBIQ_ENDPOINT") or WEBIQ_ENDPOINT,
             webiq_key=(env.get("WEBIQ_API_KEY") or "").strip(),
             port=int(env.get("PORT") or "8765"),

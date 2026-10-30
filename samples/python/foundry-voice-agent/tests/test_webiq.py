@@ -45,16 +45,25 @@ def test_unsafe_empty_and_duplicate_evidence_not_used():
     assert parse_sources({"newsResults": [{**valid, "content": ""}]}, 1) == []
 
 
-@pytest.mark.parametrize("payload", [{}, [], {"newsResults": "bad"}, {"newsResults": [42]}])
+@pytest.mark.parametrize("payload", [
+    [], {"newsResults": None}, {"newsResults": "bad"}, {"newsResults": [42]},
+    {"error": "DO_NOT_EXPOSE"}, {"errorCode": "DO_NOT_EXPOSE"},
+])
 def test_schema_errors_are_explicit(payload):
     with pytest.raises(PublicError, match="WebIQ"):
         parse_sources(payload, 1)
 
 
-async def test_mcp_calls_advertised_news_tool_without_exposing_credentials():
+@pytest.mark.parametrize("payload", [{}, {"traceId": "synthetic-trace"}, {"newsResults": []}])
+def test_omitted_empty_news_collection_is_no_evidence_not_a_schema_failure(payload):
+    assert parse_sources(payload, 1) == []
+
+
+@pytest.mark.parametrize("payload", [{"newsResults": []}, {}, {"traceId": "synthetic-trace"}])
+async def test_mcp_calls_advertised_news_tool_without_exposing_credentials(payload):
     session = AsyncMock()
     session.call_tool.return_value = CallToolResult(
-        content=[], structuredContent={"newsResults": []},
+        content=[], structuredContent=payload,
     )
     assert await WebIQ(session).search("news today", 1) == []
     name, args = session.call_tool.call_args.args
@@ -156,7 +165,9 @@ async def test_failed_calls_keep_actual_duration_and_receipt_boundary(monkeypatc
         clock[0] = 7.125
         if failure == "timeout":
             raise TimeoutError
-        return CallToolResult(content=[], isError=failure == "tool_error", structuredContent={})
+        return CallToolResult(
+            content=[], isError=failure == "tool_error", structuredContent={"newsResults": None},
+        )
 
     session = AsyncMock()
     session.call_tool.side_effect = call_tool
