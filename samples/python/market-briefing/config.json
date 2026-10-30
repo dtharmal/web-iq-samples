@@ -1,0 +1,7 @@
+{
+  "azure_openai": {
+    "endpoint": "https://<your-resource-name>.openai.azure.com/",
+    "deployment": "<your-deployment-name>",
+    "api_version": "<your-api-version>"
+  }
+}

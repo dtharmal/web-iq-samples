@@ -1,0 +1,24 @@
+subscription_id = "<azure-subscription-id>"
+location        = "eastus2"
+name_prefix     = "webiq"
+
+publisher_name  = "<publisher-name>"
+publisher_email = "<publisher-email>"
+
+entra_tenant_id   = "<microsoft-entra-tenant-id>"
+api_audience      = "api://<frontend-api-application-client-id>"
+api_required_scope = "access_as_user"
+api_allowed_client_ids = ["<approved-desktop-application-client-id>"]
+
+# Optional: enable request telemetry only after reviewing the logging guidance.
+enable_telemetry = false
+
+# Web IQ access requires binding the APIM managed identity's Application (Client)
+# ID in the Web IQ Portal after deployment. Azure RBAC does not grant Web IQ access.
+# Binding is manual until a binding API is available for automation.
+
+tags = {
+  environment = "sample"
+}
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.

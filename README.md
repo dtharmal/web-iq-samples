@@ -4,9 +4,11 @@ Runnable examples for building applications with Microsoft Web IQ.
 
 ## Project status
 
-This repository is being prepared for its initial release. Samples do not include
-third-party code; each sample installs its dependencies from public package
-registries.
+This repository includes the runnable Market briefing, Foundry Voice Agent, and
+APIM managed identity gateway samples listed below. These are educational samples,
+not production-ready reference architectures. Review each sample's security, cost, and operational
+requirements before use or deployment. No third-party source code is vendored;
+the samples install their dependencies separately.
 
 ## Samples
 
@@ -24,6 +26,24 @@ run instructions, and validation steps.
 | Sample | Language | Description |
 |---|---|---|
 | [Web IQ + Foundry Voice Agent](samples/python/foundry-voice-agent/) | Python, TypeScript | Native Microsoft Foundry voice agent that decides when to search Web IQ news and shows cited sources after speaking. |
+| [Market briefing](samples/python/market-briefing/) | Python | Uses Web IQ web and news passages to generate a cited Markdown briefing. Azure OpenAI is the example model provider; other chat models require small integration changes. Model usage is a separate cost. Supports API-key or certificate-based Microsoft Entra authentication for Web IQ. |
+| [APIM managed identity gateway](samples/terraform/apim-managed-identity/README.md) | Terraform | Protect Web IQ with Entra authentication, query redaction, and optional operational telemetry. |
+
+## Telemetry
+
+The Foundry Voice Agent sample writes bounded timing/count logs locally by default.
+Set `PERF_LOG_ENABLED=0` to disable them; see its
+[privacy guidance](samples/python/foundry-voice-agent/README.md#telemetry).
+It does not send telemetry to the repository's maintainers.
+
+The APIM sample's Application Insights request telemetry is disabled by default.
+You can opt in with `enable_telemetry = true` and opt out again by setting it to
+`false` and applying the change. See the sample's
+[logging guidance](samples/terraform/apim-managed-identity/README.md#logging)
+for collected metadata, privacy limits, and deletion guidance. Telemetry is
+stored in your Azure subscription, not sent to this repository's maintainers.
+Web IQ service-side data handling is separate; see the
+[Web IQ privacy guidance](https://learn.microsoft.com/en-us/web-iq/resources/faq#privacy-and-data-handling).
 
 ## Contributing
 

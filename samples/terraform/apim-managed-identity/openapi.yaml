@@ -1,0 +1,93 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+openapi: 3.0.3
+info:
+  title: Web IQ Gateway
+  version: 1.0.0
+  description: Protected Web IQ web search through Azure API Management.
+paths:
+  /search/web:
+    post:
+      operationId: searchWeb
+      summary: Search the web with Web IQ
+      description: Validates the caller, requires department attribution, redacts common sensitive-number patterns, and forwards the request to Web IQ.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deptId
+          in: header
+          required: true
+          description: Department identifier used for attribution and logging. This value is not an authorization boundary.
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebSearchRequest'
+            example:
+              query: recent energy market developments
+              maxResults: 5
+              contentFormat: passage
+      responses:
+        '200':
+          description: Web IQ search response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Invalid department identifier or request body.
+        '401':
+          description: Missing or invalid user access token.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    WebSearchRequest:
+      type: object
+      required:
+        - query
+      additionalProperties: true
+      properties:
+        query:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        maxResults:
+          type: integer
+          minimum: 1
+          maximum: 50
+        language:
+          type: string
+          minLength: 2
+          maxLength: 2
+        region:
+          type: string
+          minLength: 2
+          maxLength: 2
+        location:
+          type: string
+        contentFormat:
+          type: string
+          enum:
+            - passage
+            - text
+            - html
+            - markdown
+        maxLength:
+          type: integer
+          minimum: 1
+          maximum: 500000
+        safeSearch:
+          type: string
+          enum:
+            - off
+            - strict

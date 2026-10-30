@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webiq-market-briefing"
+version = "0.1.0"
+description = "Generate a cited Markdown market briefing with Web IQ and Azure OpenAI."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "azure-identity>=1.25,<2",
+    "openai>=2.0,<3",
+    "webiq>=0.1.8,<0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+]
+
+[project.scripts]
+webiq-market-briefing = "webiq_market_briefing.cli:entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

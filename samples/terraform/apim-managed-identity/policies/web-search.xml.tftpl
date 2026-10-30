@@ -1,0 +1,145 @@
+<!-- Copyright (c) Microsoft Corporation.
+     Licensed under the MIT License. -->
+
+<policies>
+  <inbound>
+    <base />
+
+    <!-- Validate a delegated user access token issued by Microsoft Entra. -->
+    <validate-azure-ad-token
+      tenant-id="${entra_tenant_id}"
+      header-name="Authorization"
+      failed-validation-httpcode="401"
+      failed-validation-error-message="Missing or invalid access token."
+      output-token-variable-name="validated-jwt">
+      <client-application-ids>
+%{ for client_id in api_allowed_client_ids ~}
+        <application-id>${client_id}</application-id>
+%{ endfor ~}
+      </client-application-ids>
+      <audiences>
+        <audience>${api_audience}</audience>
+      </audiences>
+      <required-claims>
+        <claim name="scp" match="any" separator=" ">
+          <value>${api_required_scope}</value>
+        </claim>
+      </required-claims>
+    </validate-azure-ad-token>
+
+    <!-- Require a client-supplied department identifier for attribution. -->
+    <set-variable
+      name="deptId"
+      value="@(context.Request.Headers.GetValueOrDefault(&quot;deptId&quot;, string.Empty).Trim())" />
+    <choose>
+      <when condition="@(
+        string.IsNullOrWhiteSpace((string)context.Variables[&quot;deptId&quot;]) ||
+        !Regex.IsMatch((string)context.Variables[&quot;deptId&quot;], @&quot;^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$&quot;)
+      )">
+        <return-response>
+          <set-status code="400" reason="Bad Request" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>{"error":"invalid_dept_id","message":"Supply a valid deptId header."}</set-body>
+        </return-response>
+      </when>
+    </choose>
+
+    <!-- Enforce the imported OpenAPI JSON schema and a small request-size limit. -->
+    <validate-content
+      unspecified-content-type-action="prevent"
+      max-size="65536"
+      size-exceeded-action="prevent"
+      errors-variable-name="requestBodyValidation">
+      <content
+        type="application/json"
+        validate-as="json"
+        action="prevent"
+        allow-additional-properties="true" />
+    </validate-content>
+
+    <set-variable
+      name="requestJson"
+      value="@((JObject)context.Request.Body.As&lt;JObject&gt;(preserveContent: true))" />
+    <set-variable
+      name="originalQuery"
+      value="@(((JObject)context.Variables[&quot;requestJson&quot;])[&quot;query&quot;]?.ToString() ?? string.Empty)" />
+    <choose>
+      <when condition="@(string.IsNullOrWhiteSpace((string)context.Variables[&quot;originalQuery&quot;]))">
+        <return-response>
+          <set-status code="400" reason="Bad Request" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>{"error":"invalid_query","message":"The JSON body must contain a non-empty query property."}</set-body>
+        </return-response>
+      </when>
+    </choose>
+
+    <!--
+      Sensitive query inspection and redaction.
+      Extend this section with organization-specific DLP or content-safety checks.
+    -->
+    <set-variable
+      name="sanitizedQuery"
+      value="@{
+        var query = (string)context.Variables[&quot;originalQuery&quot;];
+        query = Regex.Replace(query, @&quot;\b\d{3}[- ]?\d{2}[- ]?\d{4}\b&quot;, &quot;[REDACTED-SSN]&quot;);
+        query = Regex.Replace(query, @&quot;\b(?:\d[ -]*?){13,19}\b&quot;, &quot;[REDACTED-PAYMENT-CARD]&quot;);
+        return query;
+      }" />
+    <set-variable
+      name="sensitiveDataRedacted"
+      value="@(!string.Equals(
+        (string)context.Variables[&quot;originalQuery&quot;],
+        (string)context.Variables[&quot;sanitizedQuery&quot;],
+        StringComparison.Ordinal
+      ))" />
+    <set-body>@{
+      var body = (JObject)context.Variables["requestJson"];
+      body["query"] = (string)context.Variables["sanitizedQuery"];
+      return body.ToString(Newtonsoft.Json.Formatting.None);
+    }</set-body>
+
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+
+    <!-- Log safe metadata only. Never log the raw or sanitized query text. -->
+    <trace source="webiq-gateway" severity="information">
+      <message>Web IQ request accepted</message>
+      <metadata name="departmentId" value="@((string)context.Variables[&quot;deptId&quot;])" />
+      <metadata name="sensitiveDataRedacted" value="@(((bool)context.Variables[&quot;sensitiveDataRedacted&quot;]).ToString())" />
+      <metadata name="correlationId" value="@(context.RequestId.ToString())" />
+    </trace>
+
+    <!-- Prevent clients from forwarding their own backend credentials or metadata. -->
+    <set-header name="x-apikey" exists-action="delete" />
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <set-header name="deptId" exists-action="delete" />
+
+    <!-- Replace the user's token with the APIM system-assigned managed identity token. -->
+    <authentication-managed-identity
+      resource="${webiq_token_resource}"
+      ignore-error="false" />
+  </inbound>
+
+  <backend>
+    <base />
+  </backend>
+
+  <outbound>
+    <base />
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+  </outbound>
+
+  <on-error>
+    <base />
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+  </on-error>
+</policies>
