@@ -59,10 +59,10 @@ Use your Azure Monitor retention/purge process to remove collected data when
 required. Review the [Web IQ privacy guidance](https://learn.microsoft.com/en-us/web-iq/resources/faq#privacy-and-data-handling)
 for service-side data handling.
 
-For regulated or sensitive workloads, ask your Microsoft account team about
-Web IQ Zero Query Logging, which suppresses query text from service telemetry.
-It is not self-service and requires approval for each use case. This is separate
-from APIM telemetry and is not enabled by this sample.
+For current service-side query-logging details and Zero Query Logging request
+guidance, see [Can I turn off query logging for regulated or sensitive workloads?](https://learn.microsoft.com/en-us/web-iq/resources/faq#can-i-turn-off-query-logging-for-regulated-or-sensitive-workloads).
+Service-side logging is separate from APIM telemetry and is not configured by
+this sample.
 
 ## Post-deployment checks
 

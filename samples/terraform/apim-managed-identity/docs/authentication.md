@@ -1,5 +1,10 @@
 # Gateway authentication
 
+This guide explains how to configure the gateway's two authentication hops:
+delegated Microsoft Entra access tokens from approved clients to APIM, and
+APIM's managed identity to Web IQ. It covers API registration, token validation,
+managed-identity binding, and troubleshooting.
+
 ```text
 Desktop/public client -- delegated access token --> APIM
 APIM -- managed identity token --> Web IQ
