@@ -159,12 +159,38 @@ def test_summary_reports_actual_overlap_and_keeps_failed_turn_missing():
     ]
     result = summarize([{"session_id": "test", "turn": 0, **row} for row in rows])[0]
     assert result["mcp_agent_setup_overlap_ms"] == 180
+    assert result["mcp_voice_connect_overlap_ms"] is None
     assert result["ready_ms"] is None
+    assert result["azure_auth_ms"] is None
     turn = result["turns"][0]
     assert turn["native_speech_stop_to_server_audio_ms"] is None
     assert turn["browser_submit_to_playback_ms"] is None
     assert not turn["browser_playback_observed"]
     assert turn["errors"] == [{"code": "voice_disconnected"}]
+
+
+def test_summary_totals_auth_acquisitions_without_changing_parent_durations():
+    rows = [
+        {"event": "stage_start", "stage": "azure_auth", "monotonic_ms": 0},
+        {"event": "stage_end", "stage": "azure_auth", "duration_ms": 150},
+        {"event": "stage_end", "stage": "azure_auth", "duration_ms": 100},
+        {"event": "stage_end", "stage": "agent_lookup", "duration_ms": 500},
+    ]
+    result = summarize([{"session_id": "test", "turn": 0, **row} for row in rows])[0]
+    assert result["azure_auth_ms"] == 250
+    assert result["setup_ms"]["agent_lookup"] == 500
+
+
+def test_cache_hit_is_distinct_from_missing_remote_lookup(tmp_path):
+    logger = PerformanceLogger(tmp_path / "private" / "performance.jsonl")
+    trace = PerformanceTrace(logger)
+    with trace.span("agent_cache"):
+        pass
+    rows = list(logger.queue.queue)
+    assert logger.status()["error_code"] is None
+    result = summarize(rows)[0]
+    assert result["setup_ms"]["agent_cache"] >= 0
+    assert result["setup_ms"]["agent_lookup"] is None
 
 
 def test_summary_direct_turn_has_one_pass_and_no_invented_search_or_citation_time():
@@ -181,3 +207,16 @@ def test_summary_direct_turn_has_one_pass_and_no_invented_search_or_citation_tim
     assert turn["webiq_round_trip_ms"] is None
     assert turn["search_model_ms"] is None
     assert turn["citation_model_ms"] is None
+
+
+@pytest.mark.parametrize("voice_start,expected", [(100, 100), (250, 0)])
+def test_summary_measures_mcp_voice_overlap_without_double_counting(voice_start, expected):
+    rows = [
+        {"event": "stage_start", "stage": "mcp_setup", "monotonic_ms": 0},
+        {"event": "stage_end", "stage": "mcp_setup", "monotonic_ms": 200, "duration_ms": 200},
+        {"event": "stage_start", "stage": "voice_connect", "monotonic_ms": voice_start},
+        {"event": "stage_end", "stage": "voice_connect", "monotonic_ms": 400, "duration_ms": 400 - voice_start},
+    ]
+    result = summarize([{"session_id": "test", "turn": 0, **row} for row in rows])[0]
+    assert result["mcp_voice_connect_overlap_ms"] == expected
+    assert result["mcp_agent_setup_overlap_ms"] is None

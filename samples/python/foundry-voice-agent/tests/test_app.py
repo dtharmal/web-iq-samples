@@ -118,7 +118,7 @@ def test_client_timings_reject_invalid_duration_or_content(metric):
 
 
 @pytest.mark.parametrize("greeting_type", [None, "template", "llm_generated"])
-async def test_independent_startup_work_overlaps_but_both_finish_before_voice(monkeypatch, greeting_type):
+async def test_independent_startup_work_overlaps_before_bridge_handoff(monkeypatch, greeting_type):
     mcp_started, lookup_started = asyncio.Event(), asyncio.Event()
     ready = []
     resource = object()
@@ -141,11 +141,22 @@ async def test_independent_startup_work_overlaps_but_both_finish_before_voice(mo
         )))
 
     monkeypatch.setattr(main_module.WebIQ, "connect", connect)
-    client = SimpleNamespace(agents=SimpleNamespace(get=AsyncMock(side_effect=get)))
+    connection = object()
+
+    @asynccontextmanager
+    async def native_connect(**kwargs):
+        assert "agent" in ready
+        yield connection
+
+    client = SimpleNamespace(
+        agents=SimpleNamespace(get=AsyncMock(side_effect=get)),
+        beta=SimpleNamespace(voice_agents=SimpleNamespace(realtime=SimpleNamespace(connect=native_connect))),
+    )
     async with asyncio.timeout(1), main_module.prepare_services(
         client, Settings(agent_version="3"), PerformanceTrace(),
-    ) as (webiq, greeting_mode):
+    ) as (webiq, conn, greeting_mode):
         assert webiq is resource
+        assert conn is connection
         assert greeting_mode == (greeting.type if greeting else None)
         assert set(ready) == {"mcp", "agent"}
     assert ready[-1] == "mcp_closed"
@@ -169,10 +180,10 @@ async def test_startup_keeps_privacy_kind_and_latest_pin_guards(monkeypatch, kin
             kind=kind, store=store, greeting={"type": "template"},
         ))),
     ))))
-    with pytest.raises(main_module.PublicError) as error:
+    with pytest.raises(ExceptionGroup) as error:
         async with main_module.prepare_services(client, Settings(agent_version="7"), PerformanceTrace()):
             pytest.fail("Invalid definitions must not open native voice.")
-    assert error.value.code == code
+    assert public_error(error.value).code == code
 
 
 async def test_startup_failure_cancels_lookup_without_opening_voice(monkeypatch):
@@ -193,7 +204,7 @@ async def test_startup_failure_cancels_lookup_without_opening_voice(monkeypatch)
 
     monkeypatch.setattr(main_module.WebIQ, "connect", connect)
     client = SimpleNamespace(agents=SimpleNamespace(get=AsyncMock(side_effect=get)))
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ExceptionGroup):
         async with asyncio.timeout(1), main_module.prepare_services(client, Settings(), PerformanceTrace()):
             pytest.fail("Voice cannot start with missing grounding")
     assert stopped.is_set()

@@ -31,7 +31,7 @@ ERROR_KINDS = frozenset({
 })
 FIELDS = METRICS | {"turn", "stage", "outcome", "input_kind", "response_id", "call_id", "source_count", "code", "error_kind"}
 EVENTS = EVENTS | {"client_playback_error", "client_playback_buffered", "answer_playback_complete"}
-STAGES = STAGES | {"citation_ui", "respond"}
+STAGES = STAGES | {"citation_ui", "respond", "azure_auth", "agent_cache"}
 ERROR_CODES = ERROR_CODES | {"playback_suspended", "playback_stalled", "playback_limit", "playback_invalid",
                              "playback_unavailable", "citation_failed", "citation_timeout", "citation_unavailable"}
 METRICS = METRICS | {"browser_queue_ms", "browser_audio_context_ms", "browser_clock_stall_ms",

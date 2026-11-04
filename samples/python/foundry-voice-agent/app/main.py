@@ -19,9 +19,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from app.access import COOKIE, LOGIN_COOKIE, SESSION_SECONDS, Access
+from app.agent_validation import VALIDATION_REFRESH_SECONDS, AgentValidationCache, validate_agent
 from app.bridge import Bridge
 from app.capacity import Admission
 from app.config import ROOT, Settings
+from app.credentials import SessionCredential
 from app.performance import PerformanceLogger, PerformanceTrace
 from app.webiq import PublicError, WebIQ
 
@@ -34,19 +36,28 @@ admission = Admission()
 access: Access | None = None
 access_verifier = ""
 performance = PerformanceLogger(ROOT / ".logs" / "performance.jsonl", enabled=False)
+agent_validation: AgentValidationCache | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global performance
+    global performance, agent_validation
     settings = Settings.load()
     get_access(settings)
     log_directory = Path("/tmp/webiq-demo-performance") if settings.hosted else ROOT / ".logs"
     performance = PerformanceLogger(log_directory / "performance.jsonl", enabled=settings.perf_log_enabled)
     await asyncio.to_thread(performance.start)
+    agent_validation = AgentValidationCache() if not settings.hosted and settings.local_agent_validation_enabled else None
+    refresh = asyncio.create_task(refresh_agent_validation(agent_validation)) if agent_validation else None
     try:
         yield
     finally:
+        if refresh:
+            refresh.cancel()
+            await asyncio.gather(refresh, return_exceptions=True)
+        if agent_validation:
+            agent_validation.invalidate()
+        agent_validation = None
         if access:
             access.revoke_all()
         await asyncio.to_thread(performance.close)
@@ -75,6 +86,35 @@ def credential_for(settings: Settings):
     if settings.hosted:
         return ManagedIdentityCredential(client_id=settings.managed_identity_client_id)
     return AzureCliCredential(tenant_id=settings.tenant_id or None, process_timeout=15)
+
+
+async def refresh_agent_validation(cache: AgentValidationCache) -> None:
+    try:
+        while True:
+            try:
+                settings = Settings.load()
+                if (settings.hosted or not settings.local_agent_validation_enabled
+                        or not settings.agent_name or not settings.agent_version):
+                    cache.invalidate()
+                else:
+                    checked_at = time.monotonic()
+                    async with (
+                        asyncio.timeout(25),
+                        credential_for(settings) as credential,
+                        AIProjectClient(
+                            settings.project_endpoint, credential=credential, allow_preview=True,
+                            retry_total=0, connection_timeout=15, read_timeout=20,
+                        ) as client,
+                    ):
+                        greeting = await validate_agent(client, settings)
+                    cache.store(settings, greeting, checked_at)
+            except Exception as exc:  # noqa: BLE001 -- background boundary logs only a fixed public code
+                code = public_error(exc).code
+                cache.invalidate(code)
+                log.warning("Background agent validation failed: %s (%s)", code, type(exc).__name__)
+            await asyncio.sleep(VALIDATION_REFRESH_SECONDS)
+    finally:
+        cache.invalidate()
 
 
 @app.middleware("http")
@@ -185,6 +225,8 @@ async def health(request: Request):
         "grounding": "WebIQ MCP / news", "native_voice": True,
         "active_sessions": len(admission.active), "max_sessions": settings.max_sessions,
         "performance_logging": performance.status(),
+        "agent_validation": agent_validation.status(settings)
+        if agent_validation and not settings.hosted else {"state": "per_connection"},
         "access": {"hosted": settings.hosted, "csrf": request.state.login.csrf if request.state.login else None},
     }
 
@@ -238,32 +280,25 @@ async def voice(ws: WebSocket):
         async with (
             asyncio.timeout(min(settings.session_seconds, login.expires - time.monotonic())
                             if login else settings.session_seconds),
-            credential_for(settings) as credential,
+            (credential_for(settings) if settings.hosted else
+             SessionCredential(credential_for(settings), trace, cache=True)) as credential,
             AIProjectClient(
                 settings.project_endpoint, credential=credential, allow_preview=True,
                 retry_total=0, connection_timeout=15, read_timeout=20,
             ) as client,
-            prepare_services(client, settings, trace) as (webiq, greeting_mode),
+            prepare_services(client, settings, trace) as (webiq, conn, greeting_mode),
         ):
-            manager = client.beta.voice_agents.realtime.connect(
-                agent_name=settings.agent_name, extra_query={"store": "false"},
-                heartbeat=20, max_msg_size=512_000,
-            )
-            with trace.span("voice_connect"):
-                async with asyncio.timeout(25):
-                    conn = await manager.__aenter__()
-            try:
-                startup_watcher.cancel()
-                await asyncio.gather(startup_watcher, return_exceptions=True)
-                bridge = Bridge(ws, conn, webiq, trace=trace, greeting_mode=greeting_mode)
-                await bridge.run()
-            finally:
-                await manager.__aexit__(None, None, None)
+            startup_watcher.cancel()
+            await asyncio.gather(startup_watcher, return_exceptions=True)
+            bridge = Bridge(ws, conn, webiq, trace=trace, greeting_mode=greeting_mode)
+            await bridge.run()
     except (WebSocketDisconnect, asyncio.CancelledError):
         outcome = "disconnected"
     except Exception as exc:  # noqa: BLE001 -- final boundary reports a sanitized fatal error
         # Boundary handler intentionally never logs exception text or request content.
         error = public_error(exc, hosted=settings.hosted)
+        if agent_validation and not settings.hosted:
+            agent_validation.invalidate(error.code)
         outcome = "failed"
         trace.mark("error", turn=bridge.turn if bridge else 0, code=error.code, outcome=outcome)
         log.warning("Session stopped: %s (%s)", error.code, type(exc).__name__)
@@ -295,28 +330,49 @@ async def cancel_on_startup_disconnect(ws: WebSocket, owner: asyncio.Task) -> No
 @asynccontextmanager
 async def prepare_services(client: AIProjectClient, settings: Settings, trace: PerformanceTrace):
     async def verify_agent():
+        cached = agent_validation.lookup(settings) if agent_validation else None
+        if cached is not None:
+            with trace.span("agent_cache"):
+                return cached.greeting_mode
         with trace.span("agent_lookup"):
             async with asyncio.timeout(25):
-                agent = await client.agents.get(agent_name=settings.agent_name)
-                version = agent.versions.latest
-                if version.definition.kind != "voice" or version.definition.store is not False:
-                    raise PublicError("agent_config", "The agent must be native kind=voice with store=False.")
-                if settings.agent_version and version.version != settings.agent_version:
-                    raise PublicError("agent_version", "The active agent version changed. Review it before reconnecting.")
-                greeting = getattr(version.definition, "greeting", None)
-                if greeting is not None and greeting.type not in {"template", "llm_generated"}:
-                    raise PublicError("agent_config", "The agent's startup greeting mode is not supported.")
-                return greeting.type if greeting is not None else None
+                try:
+                    return await validate_agent(client, settings)
+                except BaseException:
+                    if agent_validation:
+                        agent_validation.invalidate()
+                    raise
 
-    lookup = asyncio.create_task(verify_agent())
-    try:
-        # These independent startup requests overlap. MCP scopes stay in their owning task.
-        async with WebIQ.connect(settings, trace=trace) as webiq:
-            greeting_mode = await lookup
-            yield webiq, greeting_mode
-    finally:
-        lookup.cancel()
-        await asyncio.gather(lookup, return_exceptions=True)
+    connected = asyncio.get_running_loop().create_future()
+
+    async def own_voice():
+        greeting_mode = await verify_agent()
+        manager = client.beta.voice_agents.realtime.connect(
+            agent_name=settings.agent_name, extra_query={"store": "false"},
+            heartbeat=20, max_msg_size=512_000,
+        )
+        with trace.span("voice_connect"):
+            async with asyncio.timeout(25):
+                conn = await manager.__aenter__()
+        try:
+            if connected.cancelled():
+                return
+            connected.set_result((conn, greeting_mode))
+            await asyncio.Event().wait()
+        finally:
+            await manager.__aexit__(None, None, None)
+
+    # Enter the task group before MCP's cancel scopes, and leave MCP in this same task.
+    # Native startup events stay in aiohttp's flow-controlled receive queue (512 kB/frame);
+    # Bridge is the sole reader after both services exist, so no greeting/ready event is lost.
+    async with asyncio.TaskGroup() as group:
+        native = group.create_task(own_voice())
+        try:
+            async with WebIQ.connect(settings, trace=trace) as webiq:
+                conn, greeting_mode = await connected
+                yield webiq, conn, greeting_mode
+        finally:
+            native.cancel()
 
 
 def public_error(exc: Exception, *, hosted=False) -> PublicError:

@@ -172,8 +172,9 @@ name and version in the ignored `.foundry/agent.json`. It never runs automatical
 create a second agent while one is recorded. To publish changed instructions, audio settings or
 tools as a new version, run it again with the same name and `--new-version`.
 
-At connect time the app checks that the recorded version is still the latest version and that
-conversation storage is off. If someone edits the agent elsewhere, for example in the portal,
+The app checks that the recorded version is still the latest version and that conversation
+storage is off. Local mode reuses successful checks for at most 30 seconds; hosted mode
+checks every connection. If someone edits the agent elsewhere, for example in the portal,
 review the change and then update the recorded version on purpose.
 
 If you change `FOUNDRY_PROJECT_ENDPOINT`, the sample refuses to silently reuse metadata from a
@@ -257,6 +258,43 @@ setup, source normalization, model generation, citation selection, and browser p
 They are not per article, gateway-only processing time, or end-to-end answer latency.
 Separate timing stages expose the broader answer lifecycle.
 
+### Faster session startup
+
+MCP setup runs concurrently with agent validation. After validation succeeds, native voice
+connection starts without waiting for MCP setup to finish. Both services and the effective
+`session.updated` audio/tool configuration must be ready before microphone frames are sent.
+Early greeting/configuration events remain in the native transport's flow-controlled queue;
+the bridge is the sole reader after handoff. MCP scopes enter and exit in the same owning
+task. A structured sibling task owns voice; disconnect, logout, cancellation or failure
+closes both upstreams and releases capacity. No voice sessions are pre-opened or pooled.
+
+Local mode reuses the Azure CLI token between the REST check and voice handshake within
+one session, avoiding duplicate acquisition for the same scope/tenant. Tokens refresh within
+five minutes of expiry; claims challenges and unknown options bypass reuse. Token state is
+cleared on session exit, including failure/cancellation, and never written to disk. Hosted
+mode retains the managed-identity credential's own behavior.
+
+By default, the local server performs a read-only agent check at startup and refreshes it
+20 seconds after each check. Successful native-kind, `store=False`, latest pinned version
+and greeting validation can be reused for at most **30 seconds from check start**. The cache
+is keyed by endpoint, tenant, agent name/version and mode; it stores only that key, expiry
+and greeting mode, not the full definition or credentials. Changed configuration, expiry,
+refresh errors or failed sessions invalidate or bypass reuse. A cold/expired cache falls
+back to synchronous validation, never stale data. Shutdown cancels the background task.
+Health reports nonsecret validation freshness/error state.
+
+This is a deliberate local freshness tradeoff: a remote version/privacy change may take
+up to 30 seconds to block a new local connection. Set `LOCAL_AGENT_VALIDATION_ENABLED=0`
+for fresh per-connection checks and no background Azure calls. Hosted mode always uses
+per-connection validation; unpinned agents bypass caching. Background refresh adds periodic
+Foundry REST requests but creates no voice/MCP sessions and performs no searches.
+
+`python -m app.perf_summary` reports `agent_cache` separately from remote `agent_lookup`,
+`azure_auth_ms` for actual token acquisition, and `mcp_voice_connect_overlap_ms` alongside
+`mcp_agent_setup_overlap_ms`. Nested auth/setup durations and concurrent durations must not
+be added as sequential latency. Missing measurements stay null. Click-to-ready and greeting
+playback completion are different milestones; no fixed startup-latency guarantee is implied.
+
 The harness permits one search call per turn, not parallel search fan-out. Each call returns
 up to five passages (3,500 characters each), in English/US; it does not fetch whole articles.
 Absent `newsResults` in a successful MCP payload means no results under the
@@ -279,8 +317,8 @@ npx playwright install chromium --only-shell
 npm run test:browser
 ```
 
-Browser tests start their own server on port `8766` (override with `TEST_PORT`) and use a
-synthetic microphone.
+Browser tests start their own server on port `8766` (override with `TEST_PORT`), disable
+background validation, and use mocked voice sockets with a synthetic microphone.
 
 With the server running and `.env` configured, these **opt-in live checks incur usage**. They
 print counts, IDs and timings only, never audio, transcripts or credentials:

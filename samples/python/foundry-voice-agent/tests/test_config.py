@@ -58,3 +58,16 @@ def test_invalid_metadata_reports_configuration_error(configured, metadata):
     configured.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="recorded agent metadata"):
         Settings.load()
+
+
+@pytest.mark.parametrize("value,enabled", [("0", False), ("1", True)])
+def test_local_validation_refresh_flag(configured, monkeypatch, value, enabled):
+    monkeypatch.setenv("LOCAL_AGENT_VALIDATION_ENABLED", value)
+    assert Settings.load().local_agent_validation_enabled is enabled
+
+
+def test_local_validation_refresh_defaults_on_and_rejects_invalid_flag(configured, monkeypatch):
+    assert Settings.load().local_agent_validation_enabled is True
+    monkeypatch.setenv("LOCAL_AGENT_VALIDATION_ENABLED", "true")
+    with pytest.raises(ValueError, match="LOCAL_AGENT_VALIDATION_ENABLED"):
+        Settings.load()

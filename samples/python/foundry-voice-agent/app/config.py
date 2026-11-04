@@ -30,6 +30,7 @@ class Settings:
     port: int = 8765
     session_seconds: int = 600
     perf_log_enabled: bool = True
+    local_agent_validation_enabled: bool = True
     mode: str = "local"
     public_origin: str = ""
     auth_verifier: str = field(default="", repr=False)
@@ -85,6 +86,8 @@ class Settings:
         env = dict(os.environ) if hosted else {**dotenv_values(ROOT / ".env"), **os.environ}
         if env.get("PERF_LOG_ENABLED", "1") not in {"0", "1"}:
             raise ValueError("PERF_LOG_ENABLED must be 0 or 1.")
+        if env.get("LOCAL_AGENT_VALIDATION_ENABLED", "1") not in {"0", "1"}:
+            raise ValueError("LOCAL_AGENT_VALIDATION_ENABLED must be 0 or 1.")
         agent = json.loads(AGENT_FILE.read_text()) if not hosted and AGENT_FILE.exists() else {}
         if not isinstance(agent, dict) or any(
             not isinstance(agent.get(key, ""), str) for key in ("name", "version", "project_endpoint")
@@ -111,6 +114,7 @@ class Settings:
             webiq_key=(env.get("WEBIQ_API_KEY") or "").strip(),
             port=int(env.get("PORT") or "8765"),
             perf_log_enabled=env.get("PERF_LOG_ENABLED", "1") == "1",
+            local_agent_validation_enabled=env.get("LOCAL_AGENT_VALIDATION_ENABLED", "1") == "1",
             mode=env.get("APP_MODE") or "local",
             public_origin=env.get("PUBLIC_ORIGIN") or "",
             auth_verifier=env.get("DEMO_AUTH_VERIFIER") or "",

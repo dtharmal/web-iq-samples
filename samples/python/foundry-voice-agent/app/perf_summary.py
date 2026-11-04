@@ -17,21 +17,26 @@ def summarize(records: list[dict]) -> list[dict]:
             return next((r for r in rows if r["event"] == event and r.get("turn") == turn
                          and (stage is None or r.get("stage") == stage)), {})
 
-        setup_intervals = [
-            (first("stage_start", stage=s).get("monotonic_ms"), first("stage_end", stage=s).get("monotonic_ms"))
-            for s in ("mcp_setup", "agent_lookup")
-        ]
-        overlap = None
-        if all(start is not None and end is not None for start, end in setup_intervals):
-            overlap = round(max(0, min(end for _, end in setup_intervals) -
-                                max(start for start, _ in setup_intervals)), 3)
+        def overlap_with(stage):
+            intervals = [
+                (first("stage_start", stage=s).get("monotonic_ms"), first("stage_end", stage=s).get("monotonic_ms"))
+                for s in ("mcp_setup", stage)
+            ]
+            if not all(start is not None and end is not None for start, end in intervals):
+                return None
+            return round(max(0, min(end for _, end in intervals) -
+                             max(start for start, _ in intervals)), 3)
         summary = {
             "session_id": session,
             "ready_ms": first("ready").get("duration_ms"),
-            "mcp_agent_setup_overlap_ms": overlap,
+            "azure_auth_ms": round(sum(r["duration_ms"] for r in rows
+                                       if r["event"] == "stage_end" and r.get("stage") == "azure_auth"), 3)
+            if any(r.get("stage") == "azure_auth" for r in rows) else None,
+            "mcp_agent_setup_overlap_ms": overlap_with("agent_lookup"),
+            "mcp_voice_connect_overlap_ms": overlap_with("voice_connect"),
             "setup_ms": {
                 stage: first("stage_end", stage=stage).get("duration_ms")
-                for stage in ("mcp_setup", "mcp_initialize", "mcp_discovery", "agent_lookup", "voice_connect")
+                for stage in ("mcp_setup", "mcp_initialize", "mcp_discovery", "agent_lookup", "agent_cache", "voice_connect")
             },
             "turns": [],
         }
