@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_FILES = (
     "__init__.py", "main.py", "config.py", "access.py", "capacity.py", "bridge.py",
     "agent.py", "activity.py", "webiq.py", "protocol.py", "performance.py", "login.html",
+    "agent_validation.py", "credentials.py",
 )
 
 

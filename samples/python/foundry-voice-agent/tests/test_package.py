@@ -21,6 +21,22 @@ def package_root(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_packaged_runtime_includes_all_local_import_dependencies():
+    import ast
+    from pathlib import Path
+
+    app_root = Path(__file__).resolve().parents[1] / "app"
+    packaged = set(package_app.RUNTIME_FILES)
+    for filename in packaged:
+        if not filename.endswith(".py"):
+            continue
+        tree = ast.parse((app_root / filename).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("app."):
+                dependency = node.module.split(".")[1] + ".py"
+                assert dependency in packaged, f"{filename} requires unpackaged {dependency}"
+
+
 def test_package_is_allowlisted_and_private(package_root):
     root = package_root
     for name in (".env", ".private-demo/access.json", ".foundry/agent.json",
@@ -36,6 +52,7 @@ def test_package_is_allowlisted_and_private(package_root):
         assert len(archive.namelist()) == len(package_app.RUNTIME_FILES) + 5
         assert not any(b"TEST_SECRET" in archive.read(name) for name in archive.namelist())
         assert archive.read("requirements.txt") == b"test-runtime==1.0\n"
+        assert {"app/agent_validation.py", "app/credentials.py"} <= set(archive.namelist())
     with pytest.raises(FileExistsError):
         package_app.package(root, target)
 
