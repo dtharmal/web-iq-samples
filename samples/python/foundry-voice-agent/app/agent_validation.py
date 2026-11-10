@@ -42,12 +42,12 @@ class AgentValidationCache:
 
     @staticmethod
     def key(settings: Settings) -> tuple[str, ...]:
-        return (settings.mode, settings.project_endpoint, settings.tenant_id,
+        return (settings.project_endpoint, settings.tenant_id,
                 settings.agent_name, settings.agent_version)
 
     def lookup(self, settings: Settings) -> ValidatedAgent | None:
         entry = self.entry
-        if (not settings.hosted and settings.local_agent_validation_enabled
+        if (settings.local_agent_validation_enabled
                 and settings.agent_version and entry is not None
                 and entry.key == self.key(settings) and time.monotonic() < entry.expires):
             return entry

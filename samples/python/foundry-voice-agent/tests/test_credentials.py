@@ -78,7 +78,7 @@ async def test_concurrent_requests_only_acquire_once(credential):
     credential.get_token.assert_awaited_once()
 
 
-async def test_hosted_mode_delegates_every_request_to_managed_identity(credential):
+async def test_disabled_cache_delegates_every_request(credential):
     async with SessionCredential(credential, PerformanceTrace(), cache=False) as wrapper:
         await wrapper.get_token("scope")
         await wrapper.get_token("scope")

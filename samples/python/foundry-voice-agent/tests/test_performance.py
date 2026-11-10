@@ -3,6 +3,7 @@
 
 import json
 import logging
+import os
 import stat
 from unittest.mock import patch
 
@@ -105,6 +106,22 @@ def test_disabled_logging_creates_no_file_or_queue_entries(tmp_path):
     assert logger.status()["state"] == "disabled"
 
 
+def test_missing_posix_file_flags_allow_new_logs_but_refuse_existing_files(tmp_path, monkeypatch):
+    path = tmp_path / "private" / "performance.jsonl"
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    monkeypatch.delattr(os, "fchmod", raising=False)
+    logger = PerformanceLogger(path)
+    logger.start()
+    PerformanceTrace(logger).mark("session_open")
+    logger.close()
+    assert len(read_records(path)) == 1
+    logger = PerformanceLogger(path)
+    logger.start()
+    logger.close()
+    assert logger.status()["error_code"] == "startup_failed"
+    assert len(read_records(path)) == 1
+
+
 def test_playback_diagnostics_are_content_free_bounded_and_enum_checked(tmp_path):
     logger = PerformanceLogger(tmp_path / "private" / "performance.jsonl")
     trace = PerformanceTrace(logger)
@@ -150,16 +167,16 @@ def test_invalid_metrics_cannot_reach_json(tmp_path, value):
 
 def test_summary_reports_actual_overlap_and_keeps_failed_turn_missing():
     rows = [
-        {"event": "stage_start", "stage": "mcp_setup", "monotonic_ms": 0},
+        {"event": "stage_start", "stage": "webiq_setup", "monotonic_ms": 0},
         {"event": "stage_start", "stage": "agent_lookup", "monotonic_ms": 20},
-        {"event": "stage_end", "stage": "mcp_setup", "monotonic_ms": 200, "duration_ms": 200},
+        {"event": "stage_end", "stage": "webiq_setup", "monotonic_ms": 200, "duration_ms": 200},
         {"event": "stage_end", "stage": "agent_lookup", "monotonic_ms": 500, "duration_ms": 480},
         {"event": "turn_start", "turn": 1, "input_kind": "speech", "monotonic_ms": 1000},
         {"event": "error", "turn": 1, "code": "voice_disconnected", "monotonic_ms": 2000},
     ]
     result = summarize([{"session_id": "test", "turn": 0, **row} for row in rows])[0]
-    assert result["mcp_agent_setup_overlap_ms"] == 180
-    assert result["mcp_voice_connect_overlap_ms"] is None
+    assert result["webiq_agent_setup_overlap_ms"] == 180
+    assert result["webiq_voice_connect_overlap_ms"] is None
     assert result["ready_ms"] is None
     assert result["azure_auth_ms"] is None
     turn = result["turns"][0]
@@ -212,11 +229,11 @@ def test_summary_direct_turn_has_one_pass_and_no_invented_search_or_citation_tim
 @pytest.mark.parametrize("voice_start,expected", [(100, 100), (250, 0)])
 def test_summary_measures_mcp_voice_overlap_without_double_counting(voice_start, expected):
     rows = [
-        {"event": "stage_start", "stage": "mcp_setup", "monotonic_ms": 0},
-        {"event": "stage_end", "stage": "mcp_setup", "monotonic_ms": 200, "duration_ms": 200},
+        {"event": "stage_start", "stage": "webiq_setup", "monotonic_ms": 0},
+        {"event": "stage_end", "stage": "webiq_setup", "monotonic_ms": 200, "duration_ms": 200},
         {"event": "stage_start", "stage": "voice_connect", "monotonic_ms": voice_start},
         {"event": "stage_end", "stage": "voice_connect", "monotonic_ms": 400, "duration_ms": 400 - voice_start},
     ]
     result = summarize([{"session_id": "test", "turn": 0, **row} for row in rows])[0]
-    assert result["mcp_voice_connect_overlap_ms"] == expected
-    assert result["mcp_agent_setup_overlap_ms"] is None
+    assert result["webiq_voice_connect_overlap_ms"] == expected
+    assert result["webiq_agent_setup_overlap_ms"] is None

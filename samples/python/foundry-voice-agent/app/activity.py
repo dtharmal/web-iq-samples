@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Literal
 
-ToolName = Literal["webiq.news", "cite_sources"]
+ToolName = Literal["webiq.auto", "cite_sources"]
 ToolState = Literal["pending", "running", "completed", "failed", "cancelled"]
 
 
@@ -36,7 +36,7 @@ class ToolActivity:
             "turn": self.turn,
             "tool": self.tool,
             "state": self.state,
-            "scope": "mcp_round_trip" if self.tool == "webiq.news" else "local_citation_validation",
+            "scope": "auto_round_trip" if self.tool == "webiq.auto" else "local_citation_validation",
             "elapsed_ms": self.elapsed_ms,
             "source_count": self.source_count,
             "response_received": self.response_received,

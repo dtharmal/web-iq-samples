@@ -2,23 +2,18 @@
 # Licensed under the MIT License.
 
 import asyncio
-import hmac
 import logging
 import re
-import secrets
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
-from urllib.parse import parse_qs
 
 from azure.ai.projects.aio import AIProjectClient
 from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
-from azure.identity.aio import AzureCliCredential, ManagedIdentityCredential
+from azure.identity.aio import AzureCliCredential
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.access import COOKIE, LOGIN_COOKIE, SESSION_SECONDS, Access
 from app.agent_validation import VALIDATION_REFRESH_SECONDS, AgentValidationCache, validate_agent
 from app.bridge import Bridge
 from app.capacity import Admission
@@ -29,12 +24,10 @@ from app.webiq import PublicError, WebIQ
 
 log = logging.getLogger("webiq_demo")
 # SDK wire logs can contain search text, headers or transcripts; never enable them in this demo.
-for name in ("azure", "httpx", "httpcore", "mcp"):
+for name in ("azure", "httpx", "httpcore"):
     logging.getLogger(name).setLevel(logging.CRITICAL)
 
 admission = Admission()
-access: Access | None = None
-access_verifier = ""
 performance = PerformanceLogger(ROOT / ".logs" / "performance.jsonl", enabled=False)
 agent_validation: AgentValidationCache | None = None
 
@@ -43,11 +36,10 @@ agent_validation: AgentValidationCache | None = None
 async def lifespan(app: FastAPI):
     global performance, agent_validation
     settings = Settings.load()
-    get_access(settings)
-    log_directory = Path("/tmp/webiq-demo-performance") if settings.hosted else ROOT / ".logs"
+    log_directory = ROOT / ".logs"
     performance = PerformanceLogger(log_directory / "performance.jsonl", enabled=settings.perf_log_enabled)
     await asyncio.to_thread(performance.start)
-    agent_validation = AgentValidationCache() if not settings.hosted and settings.local_agent_validation_enabled else None
+    agent_validation = AgentValidationCache() if settings.local_agent_validation_enabled else None
     refresh = asyncio.create_task(refresh_agent_validation(agent_validation)) if agent_validation else None
     try:
         yield
@@ -58,8 +50,6 @@ async def lifespan(app: FastAPI):
         if agent_validation:
             agent_validation.invalidate()
         agent_validation = None
-        if access:
-            access.revoke_all()
         await asyncio.to_thread(performance.close)
 
 
@@ -70,21 +60,7 @@ def allowed_host(host: str, settings: Settings) -> bool:
     return host in settings.hosts
 
 
-def get_access(settings: Settings) -> Access | None:
-    global access, access_verifier
-    if not settings.hosted:
-        return None
-    if access is None or not hmac.compare_digest(access_verifier, settings.auth_verifier):
-        if access:
-            access.revoke_all()
-        access = Access(settings.auth_verifier)
-        access_verifier = settings.auth_verifier
-    return access
-
-
 def credential_for(settings: Settings):
-    if settings.hosted:
-        return ManagedIdentityCredential(client_id=settings.managed_identity_client_id)
     return AzureCliCredential(tenant_id=settings.tenant_id or None, process_timeout=15)
 
 
@@ -93,7 +69,7 @@ async def refresh_agent_validation(cache: AgentValidationCache) -> None:
         while True:
             try:
                 settings = Settings.load()
-                if (settings.hosted or not settings.local_agent_validation_enabled
+                if (not settings.local_agent_validation_enabled
                         or not settings.agent_name or not settings.agent_version):
                     cache.invalidate()
                 else:
@@ -122,18 +98,10 @@ async def boundary(request: Request, call_next):
     settings = Settings.load()
     if not allowed_host(request.headers.get("host", ""), settings):
         response = JSONResponse({"error": "Invalid host"}, status_code=400)
-    elif (request.headers.get("origin") and request.headers["origin"] not in settings.origins
-          or settings.hosted and request.method not in {"GET", "HEAD"}
-          and request.headers.get("origin") not in settings.origins):
+    elif request.headers.get("origin") and request.headers["origin"] not in settings.origins:
         response = JSONResponse({"error": "Invalid origin"}, status_code=403)
     else:
-        gate = get_access(settings)
-        request.state.login = gate.lookup(request.cookies.get(COOKIE)) if gate else None
-        if gate and not request.state.login and request.url.path not in {"/login", "/api/login"}:
-            response = (RedirectResponse("/login", status_code=303) if request.url.path == "/"
-                        else JSONResponse({"error": "Sign in to use this demo."}, status_code=401))
-        else:
-            response = await call_next(request)
+        response = await call_next(request)
     response.headers.update({
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
@@ -145,72 +113,6 @@ async def boundary(request: Request, call_next):
             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         ),
     })
-    if settings.hosted:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000"
-    return response
-
-
-@app.get("/login")
-async def login_page():
-    if not Settings.load().hosted:
-        return RedirectResponse("/", status_code=303)
-    token = secrets.token_urlsafe(32)
-    template = (ROOT / "app" / "login.html").read_text()
-    response = HTMLResponse(template.replace("<!--CSRF-->", token))
-    response.set_cookie(LOGIN_COOKIE, token, max_age=300, secure=True, httponly=True, samesite="strict")
-    return response
-
-
-@app.post("/api/login")
-async def login(request: Request):
-    gate = get_access(Settings.load())
-    if gate is None:
-        return JSONResponse({"error": "Login is unavailable in local mode."}, status_code=404)
-    if request.headers.get("content-type", "").split(";")[0] != "application/x-www-form-urlencoded":
-        return JSONResponse({"error": "Invalid login form."}, status_code=400)
-    body = bytearray()
-    try:
-        async with asyncio.timeout(5):
-            async for chunk in request.stream():
-                if len(body) + len(chunk) > 2048:
-                    return JSONResponse({"error": "Login form too large."}, status_code=413)
-                body.extend(chunk)
-        values = parse_qs(body.decode("utf-8"), max_num_fields=2, strict_parsing=True)
-    except (ValueError, UnicodeError, TimeoutError):
-        return JSONResponse({"error": "Invalid login form."}, status_code=400)
-    csrf = values.get("csrf", [])
-    password = values.get("passphrase", [])
-    cookie = request.cookies.get(LOGIN_COOKIE, "")
-    if (len(csrf) != 1 or len(password) != 1 or not re.fullmatch(r"[A-Za-z0-9_-]{43}", cookie)
-            or not re.fullmatch(r"[A-Za-z0-9_-]{43}", csrf[0])
-            or not hmac.compare_digest(csrf[0], cookie) or not 1 <= len(password[0]) <= 256):
-        return JSONResponse({"error": "Login form expired or invalid. Reload the login page."}, status_code=403)
-    result, token = await gate.authenticate(password[0], request.client.host if request.client else "unknown")
-    if result != "ok":
-        return JSONResponse(
-            {"error": "Too many login attempts or sessions. Wait a minute and try again."
-             if result == "limited" else "Passphrase not accepted."},
-            status_code=429 if result == "limited" else 401,
-            headers={"Retry-After": "60"} if result == "limited" else {},
-        )
-    gate.revoke(request.cookies.get(COOKIE))
-    response = RedirectResponse("/", status_code=303)
-    response.set_cookie(COOKIE, token, max_age=SESSION_SECONDS, secure=True, httponly=True, samesite="strict")
-    response.delete_cookie(LOGIN_COOKIE, secure=True, httponly=True, samesite="strict")
-    return response
-
-
-@app.post("/api/logout")
-async def logout(request: Request):
-    gate = get_access(Settings.load())
-    login = request.state.login
-    token = request.headers.get("x-csrf-token", "")
-    if (gate is None or not login or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token)
-            or not hmac.compare_digest(token, login.csrf)):
-        return JSONResponse({"error": "Invalid logout request."}, status_code=403)
-    gate.revoke(request.cookies.get(COOKIE))
-    response = JSONResponse({"status": "signed_out"})
-    response.delete_cookie(COOKIE, secure=True, httponly=True, samesite="strict")
     return response
 
 
@@ -222,12 +124,10 @@ async def health(request: Request):
         "webiq_configured": bool(settings.webiq_key),
         "agent": settings.agent_name or None, "version": settings.agent_version or None,
         "session_seconds": settings.session_seconds, "recording": False,
-        "grounding": "WebIQ MCP / news", "native_voice": True,
+        "grounding": "Web IQ Auto", "native_voice": True,
         "active_sessions": len(admission.active), "max_sessions": settings.max_sessions,
         "performance_logging": performance.status(),
-        "agent_validation": agent_validation.status(settings)
-        if agent_validation and not settings.hosted else {"state": "per_connection"},
-        "access": {"hosted": settings.hosted, "csrf": request.state.login.csrf if request.state.login else None},
+        "agent_validation": agent_validation.status(settings) if agent_validation else {"state": "per_connection"},
     }
 
 
@@ -237,16 +137,11 @@ async def voice(ws: WebSocket):
     if (
         not allowed_host(ws.headers.get("host", ""), settings)
         or ws.headers.get("origin") not in settings.origins
-        or ws.client is None or not settings.hosted and ws.client.host not in {"127.0.0.1", "::1", "testclient"}
+        or ws.client is None or ws.client.host not in {"127.0.0.1", "::1", "testclient"}
     ):
         await ws.close(code=1008)
         return
-    gate = get_access(settings)
-    login = gate.lookup(ws.cookies.get(COOKIE)) if gate else None
-    if gate and not login:
-        await ws.close(code=1008)
-        return
-    subject = login.subject if login else "local"
+    subject = "local"
     if not admission.acquire(subject, settings.max_sessions):
         await ws.accept()
         await ws.send_json({
@@ -269,19 +164,12 @@ async def voice(ws: WebSocket):
         assert owner is not None
         startup_watcher = asyncio.create_task(cancel_on_startup_disconnect(ws, owner))
         watchers.append(startup_watcher)
-        if login:
-            async def revoked():
-                await login.revoked.wait()
-                owner.cancel()
-            watchers.append(asyncio.create_task(revoked()))
         if not settings.agent_name:
             raise PublicError("agent_not_configured", "Create the native voice agent using the README setup command.")
         await ws.send_json({"type": "state", "state": "connecting"})
         async with (
-            asyncio.timeout(min(settings.session_seconds, login.expires - time.monotonic())
-                            if login else settings.session_seconds),
-            (credential_for(settings) if settings.hosted else
-             SessionCredential(credential_for(settings), trace, cache=True)) as credential,
+            asyncio.timeout(settings.session_seconds),
+            SessionCredential(credential_for(settings), trace, cache=True) as credential,
             AIProjectClient(
                 settings.project_endpoint, credential=credential, allow_preview=True,
                 retry_total=0, connection_timeout=15, read_timeout=20,
@@ -296,8 +184,8 @@ async def voice(ws: WebSocket):
         outcome = "disconnected"
     except Exception as exc:  # noqa: BLE001 -- final boundary reports a sanitized fatal error
         # Boundary handler intentionally never logs exception text or request content.
-        error = public_error(exc, hosted=settings.hosted)
-        if agent_validation and not settings.hosted:
+        error = public_error(exc)
+        if agent_validation:
             agent_validation.invalidate(error.code)
         outcome = "failed"
         trace.mark("error", turn=bridge.turn if bridge else 0, code=error.code, outcome=outcome)
@@ -362,7 +250,6 @@ async def prepare_services(client: AIProjectClient, settings: Settings, trace: P
         finally:
             await manager.__aexit__(None, None, None)
 
-    # Enter the task group before MCP's cancel scopes, and leave MCP in this same task.
     # Native startup events stay in aiohttp's flow-controlled receive queue (512 kB/frame);
     # Bridge is the sole reader after both services exist, so no greeting/ready event is lost.
     async with asyncio.TaskGroup() as group:
@@ -375,14 +262,13 @@ async def prepare_services(client: AIProjectClient, settings: Settings, trace: P
             native.cancel()
 
 
-def public_error(exc: Exception, *, hosted=False) -> PublicError:
+def public_error(exc: Exception) -> PublicError:
     if isinstance(exc, BaseExceptionGroup):
-        return public_error(exc.exceptions[0], hosted=hosted)
+        return public_error(exc.exceptions[0])
     if isinstance(exc, PublicError):
         return exc
     if isinstance(exc, ClientAuthenticationError):
-        return PublicError("azure_auth", "Hosted Foundry identity is unavailable. Contact the demo owner."
-                           if hosted else "Azure login expired or is unavailable. Run the README az login command.")
+        return PublicError("azure_auth", "Azure login expired or is unavailable. Run the README az login command.")
     if isinstance(exc, HttpResponseError):
         return PublicError("azure_http", f"Foundry rejected the request (HTTP {exc.status_code}). Check access.")
     if isinstance(exc, TimeoutError):
@@ -414,7 +300,7 @@ async def worklet():
 def main():
     import uvicorn
     settings = Settings.load()
-    uvicorn.run(app, host="0.0.0.0" if settings.hosted else "127.0.0.1", port=settings.port,
+    uvicorn.run(app, host="127.0.0.1", port=settings.port,
                 ws_max_size=8192, ws_max_queue=16, workers=1, proxy_headers=False,
                 access_log=False, log_level="warning")
 

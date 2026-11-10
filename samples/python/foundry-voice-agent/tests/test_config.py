@@ -71,3 +71,9 @@ def test_local_validation_refresh_defaults_on_and_rejects_invalid_flag(configure
     monkeypatch.setenv("LOCAL_AGENT_VALIDATION_ENABLED", "true")
     with pytest.raises(ValueError, match="LOCAL_AGENT_VALIDATION_ENABLED"):
         Settings.load()
+
+
+def test_performance_logging_is_opt_in(configured, monkeypatch):
+    assert Settings.load().perf_log_enabled is False
+    monkeypatch.setenv("PERF_LOG_ENABLED", "1")
+    assert Settings.load().perf_log_enabled is True

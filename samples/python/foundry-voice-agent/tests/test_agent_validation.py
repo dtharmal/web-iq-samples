@@ -33,7 +33,7 @@ def test_cache_retains_valid_no_greeting_and_supported_modes(settings, greeting)
 
 
 @pytest.mark.parametrize("change", [
-    {"mode": "hosted"}, {"agent_version": ""}, {"agent_version": "8"},
+    {"agent_version": ""}, {"agent_version": "8"},
     {"agent_name": "other"}, {"project_endpoint": "other"}, {"tenant_id": "other"},
     {"local_agent_validation_enabled": False},
 ])
@@ -155,7 +155,7 @@ async def test_background_cancel_during_remote_check_closes_resources(settings, 
 
 
 @pytest.mark.parametrize("change", [
-    {"mode": "hosted"}, {"agent_version": ""}, {"agent_name": ""},
+    {"agent_version": ""}, {"agent_name": ""},
     {"local_agent_validation_enabled": False},
 ])
 async def test_background_never_contacts_azure_for_hosted_or_unpinned_config(settings, monkeypatch, change):

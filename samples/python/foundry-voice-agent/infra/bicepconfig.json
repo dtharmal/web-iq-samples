@@ -1,4 +1,0 @@
-{
-  "formatting": {"newlineKind": "LF", "indentKind": "Space", "indentSize": 2},
-  "analyzers": {"core": {"enabled": true, "rules": {"secure-parameter-default": {"level": "error"}}}}
-}

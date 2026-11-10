@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import { ActivityHistory, formatMilliseconds, parseActivity, type ActivityEvent } from "../src/activity";
 
 const event = (overrides: Partial<ActivityEvent> = {}): ActivityEvent => ({
-  session_id: "session1", call_id: "call1", turn: 1, tool: "webiq.news", state: "running",
-  scope: "mcp_round_trip", elapsed_ms: null, source_count: null, response_received: false, ...overrides,
+  session_id: "session1", call_id: "call1", turn: 1, tool: "webiq.auto", state: "running",
+  scope: "auto_round_trip", elapsed_ms: null, source_count: null, response_received: false, ...overrides,
 });
 
 describe("authoritative activity history", () => {
@@ -59,7 +59,7 @@ describe("authoritative activity history", () => {
     expect(history.update(event({ state: "completed", elapsed_ms: 20 }), 1)).toBe(false);
   });
 
-  it("separates local validation from MCP round-trip and validates metadata", () => {
+  it("separates local validation from Auto round-trip and validates metadata", () => {
     expect(parseActivity(event({ tool: "cite_sources", scope: "local_citation_validation" })).tool).toBe("cite_sources");
     for (const patch of [
       { tool: "unknown" }, { scope: "local_citation_validation" }, { turn: 0 },

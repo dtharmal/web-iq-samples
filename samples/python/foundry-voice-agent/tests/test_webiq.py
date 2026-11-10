@@ -3,207 +3,184 @@
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from mcp.types import CallToolResult, TextContent
 
 from app.activity import ToolActivity
 from app.config import Settings
-from app.webiq import PublicError, WebIQ, mcp_error, parse_sources, safe_url
+from app.webiq import LimitedStream, PublicError, WebIQ, parse_sources, safe_url, webiq_error
 
 
 @pytest.mark.parametrize("url", [
     "javascript:alert(1)", "data:text/html,evil", "http://127.0.0.1/private", "http://localhost/",
-    "https://user:password@example.org/", "http://2130706433/", "http://0x7f000001/",
-    "http://10.2.3.4/", "http://[::1]/", "https://example.org:1234/", "https://example.org/\nfoo",
-    "https://example.org\\@evil.org", "http://host.internal/a", "http://host.local/a",
+    "http://2130706433/", "http://0x7f000001/", "http://10.2.3.4/", "http://[::1]/",
+    "https://example.org:1234/", "https://example.org/\nfoo", "https://example.org\\@evil.org",
+    "http://host.internal/a", "http://host.local/a",
 ])
 def test_rejects_unsafe_citation_urls(url):
     assert safe_url(url) is None
 
 
-def test_source_metadata_preserves_semantics():
-    sources = parse_sources({"newsResults": [{
-        "title": "Real title", "url": "https://news.example.org/story",
-        "content": "Evidence, not instructions.", "source": "Example News",
-        "lastUpdatedAt": "2026-10-01", "crawledAt": "2026-10-02",
-    }]}, 3)
-    source = sources[0]
-    assert source.id == "t3-s1"
-    assert source.publisher == "Example News"
-    assert source.published_at is None
-    assert source.updated_at == "2026-10-01"
-    assert source.crawled_at == "2026-10-02"
-    assert "content" not in source.public()
+def test_auto_result_scoped_evidence_and_metadata():
+    payload = {"results": [
+        {"evidence": {"type": "text", "content": "Evidence A"},
+         "citations": [{"title": "T" * 250, "url": "https://example.org/a", "contentSource": "web",
+                        "lastUpdatedAt": "2026-10-01", "crawledAt": "2026-10-02"}]},
+        {"evidence": {"type": "text", "content": "Evidence B" * 1000},
+         "citations": [{"title": "B", "url": "https://example.org/b"}]},
+    ]}
+    first, second = parse_sources(payload, 3)
+    assert first.id == "t3-s1"
+    assert first.title == "T" * 200
+    assert first.content == "Evidence A"
+    assert first.publisher == "web"
+    assert first.published_at is None
+    assert first.updated_at == "2026-10-01"
+    assert first.crawled_at == "2026-10-02"
+    assert "content" not in first.public()
+    assert second.content == ("Evidence B" * 1000)[:3000]
 
 
-def test_unsafe_empty_and_duplicate_evidence_not_used():
-    valid = {"title": "Story", "url": "https://news.example.org/a", "content": "Evidence"}
-    assert len(parse_sources({"newsResults": [valid, valid, {**valid, "url": "javascript:a"}]}, 1)) == 1
-    assert parse_sources({"newsResults": [{**valid, "content": ""}]}, 1) == []
+def test_invalid_duplicate_adult_and_nontext_evidence_are_not_used():
+    citation = {"title": "Story", "url": "https://example.org/a"}
+    payload = {"results": [
+        {"evidence": {"type": "text", "content": "Evidence"}, "citations": [
+            citation, citation, {**citation, "url": "javascript:a"},
+            {**citation, "url": "https://example.org/b", "isAdult": True},
+        ]},
+        {"evidence": {"type": "media/image", "content": {}}, "citations": [citation]},
+    ]}
+    assert len(parse_sources(payload, 1)) == 1
+    assert parse_sources({"results": []}, 1) == []
 
 
 @pytest.mark.parametrize("payload", [
-    [], {"newsResults": None}, {"newsResults": "bad"}, {"newsResults": [42]},
-    {"error": "DO_NOT_EXPOSE"}, {"errorCode": "DO_NOT_EXPOSE"},
+    [], {}, {"results": None}, {"results": "bad"}, {"results": [42]},
+    {"error": "DO_NOT_EXPOSE"}, {"results": [{"evidence": {"type": "text", "content": 1}}]},
 ])
-def test_schema_errors_are_explicit(payload):
-    with pytest.raises(PublicError, match="WebIQ"):
+def test_schema_errors_are_explicit_and_redacted(payload):
+    with pytest.raises(PublicError) as error:
         parse_sources(payload, 1)
-
-
-@pytest.mark.parametrize("payload", [{}, {"traceId": "synthetic-trace"}, {"newsResults": []}])
-def test_omitted_empty_news_collection_is_no_evidence_not_a_schema_failure(payload):
-    assert parse_sources(payload, 1) == []
-
-
-@pytest.mark.parametrize("payload", [{"newsResults": []}, {}, {"traceId": "synthetic-trace"}])
-async def test_mcp_calls_advertised_news_tool_without_exposing_credentials(payload):
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        content=[], structuredContent=payload,
-    )
-    assert await WebIQ(session).search("news today", 1) == []
-    name, args = session.call_tool.call_args.args
-    assert name == "news"
-    assert args["query"] == "news today"
-    assert args["contentFormat"] == "passage"
-    assert args["maxResults"] == 5
-    assert "api_key" not in args
-
-
-async def test_mcp_json_content_fallback_uses_real_schema_only():
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        content=[TextContent(type="text", text=json.dumps({"newsResults": []}))],
-    )
-    assert await WebIQ(session).search("news", 1) == []
-    session.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="invalid")])
-    with pytest.raises(PublicError, match="invalid result JSON"):
-        await WebIQ(session).search("news", 1)
-
-
-async def test_mcp_error_is_not_a_success_or_raw_payload_leak():
-    session = AsyncMock()
-    session.call_tool.return_value = CallToolResult(
-        isError=True, content=[TextContent(type="text", text="DO_NOT_EXPOSE")],
-    )
-    with pytest.raises(PublicError) as error:
-        await WebIQ(session).search("news", 1)
     assert "DO_NOT_EXPOSE" not in str(error.value)
-    assert error.value.code == "webiq_tool"
 
 
-async def test_mcp_timeout_and_query_limits():
-    session = AsyncMock()
-    session.call_tool.side_effect = TimeoutError
-    with pytest.raises(PublicError) as error:
-        await WebIQ(session).search("news", 1)
-    assert error.value.code == "webiq_timeout"
-    for query in ("", " " * 10, "a" * 1001):
-        with pytest.raises(PublicError) as error:
-            await WebIQ(session).search(query, 1)
-        assert error.value.code == "invalid_query"
+async def test_auto_request_and_entitlement_errors():
+    requests = []
 
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
 
-def test_auth_errors_redacted_and_group_unwrapped():
-    request = httpx.Request("POST", "https://api.microsoft.ai/v3/mcp", headers={"x-apikey": "SECRET"})
-    exc = httpx.HTTPStatusError("SECRET", request=request, response=httpx.Response(401, request=request))
-    error = mcp_error(ExceptionGroup("group", [exc]))
-    assert error.code == "webiq_http_401"
-    assert "SECRET" not in error.message
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle), headers={"x-apikey": "SECRET"}) as client:
+        assert await WebIQ(client, "https://api.microsoft.ai/v3/auto").search("news today", 1) == []
+    assert requests[0].method == "POST"
+    assert json.loads(requests[0].content) == {
+        "query": "news today", "language": "en", "region": "US", "mode": "fast",
+        "responseFilter": ["web", "news"], "maxResponseLength": 3000, "maxCitations": 5,
+    }
+    assert requests[0].headers["x-apikey"] == "SECRET"
+    for status in (401, 403, 429):
+        request = httpx.Request("POST", "https://api.microsoft.ai/v3/auto")
+        exc = httpx.HTTPStatusError("SECRET", request=request, response=httpx.Response(status, request=request))
+        error = webiq_error(exc)
+        assert error.code == f"webiq_http_{status}"
+        assert "SECRET" not in error.message
+        if status == 403:
+            assert "not enabled for Auto" in error.message
     assert "SECRET" not in repr(Settings(webiq_key="SECRET"))
 
 
-async def test_timing_is_actual_mcp_round_trip_not_notifications_or_source_parsing(monkeypatch):
+@pytest.mark.parametrize("status", [401, 403, 429, 500])
+async def test_http_errors_do_not_expose_response_body(status):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, text="PRIVATE_RESPONSE"))
+    ) as client:
+        with pytest.raises(PublicError) as error:
+            await WebIQ(client, "https://api.microsoft.ai/v3/auto").search("news", 1)
+    assert error.value.code == f"webiq_http_{status}"
+    assert "PRIVATE_RESPONSE" not in str(error.value)
+
+
+async def test_invalid_json_and_timeout_are_sanitized():
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text="PRIVATE_INVALID"))
+    ) as client:
+        with pytest.raises(PublicError) as error:
+            await WebIQ(client, "https://api.microsoft.ai/v3/auto").search("news", 1)
+    assert error.value.code == "webiq_schema"
+    assert "PRIVATE_INVALID" not in str(error.value)
+
+    def timeout(request):
+        raise httpx.ReadTimeout("PRIVATE_TIMEOUT", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(timeout)) as client:
+        with pytest.raises(PublicError) as error:
+            await WebIQ(client, "https://api.microsoft.ai/v3/auto").search("news", 1)
+    assert error.value.code == "webiq_timeout"
+    assert "PRIVATE_TIMEOUT" not in str(error.value)
+
+
+@pytest.mark.parametrize("size,accepted", [(512_000, True), (512_001, False)])
+async def test_response_stream_size_limit(size, accepted):
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"x" * 256_000
+            yield b"x" * (size - 256_000)
+
+    stream = LimitedStream(Stream())
+    if accepted:
+        assert sum([len(chunk) async for chunk in stream]) == size
+    else:
+        with pytest.raises(PublicError) as error:
+            _ = [chunk async for chunk in stream]
+        assert error.value.code == "webiq_size"
+
+
+async def test_timing_and_cancel_boundaries(monkeypatch):
     clock = [10.0]
     monkeypatch.setattr("app.activity.perf_counter", lambda: clock[0])
-    activity = ToolActivity("session", "call", 1, "webiq.news")
-    order = []
+    activity = ToolActivity("session", "call", 1, "webiq.auto")
 
-    async def dispatched():
-        order.append("dispatch")
+    async def dispatch():
         assert activity.started_at is None
-        clock[0] = 100.0  # Notification/setup time must not be counted.
+        clock[0] = 100.0
 
-    async def call_tool(*_):
-        order.append("mcp")
+    async def handle(request):
         assert activity.started_at == 100.0
         clock[0] = 100.012345
-        return CallToolResult(content=[], structuredContent={"newsResults": []})
+        return httpx.Response(200, json={"results": []})
 
-    def parse(payload, turn):
-        clock[0] = 200.0  # Post-receipt normalization must not be counted.
-        return parse_sources(payload, turn)
-
-    monkeypatch.setattr("app.webiq.parse_sources", parse)
-    session = AsyncMock()
-    session.call_tool.side_effect = call_tool
-    await WebIQ(session).search("news", 1, activity=activity, on_dispatch=dispatched)
-    assert order == ["dispatch", "mcp"]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        await WebIQ(client, "https://api.microsoft.ai/v3/auto").search(
+            "news", 1, activity=activity, on_dispatch=dispatch,
+        )
     assert activity.elapsed_ms == pytest.approx(12.345)
     assert activity.response_received
-    activity.stop_clock()  # Terminal timing cannot grow with model/audio time.
-    assert activity.elapsed_ms == pytest.approx(12.345)
-    assert set(activity.event()) == {
-        "session_id", "call_id", "turn", "tool", "state", "scope", "elapsed_ms",
-        "source_count", "response_received",
-    }
 
+    activity = ToolActivity("session", "call", 1, "webiq.auto")
+    started = asyncio.Event()
 
-@pytest.mark.parametrize("failure", ["timeout", "tool_error", "invalid_schema"])
-async def test_failed_calls_keep_actual_duration_and_receipt_boundary(monkeypatch, failure):
-    clock = [7.0]
-    monkeypatch.setattr("app.activity.perf_counter", lambda: clock[0])
-    activity = ToolActivity("session", "call", 1, "webiq.news")
-    dispatch = AsyncMock()
-
-    async def call_tool(*_):
-        dispatch.assert_awaited_once()
-        clock[0] = 7.125
-        if failure == "timeout":
-            raise TimeoutError
-        return CallToolResult(
-            content=[], isError=failure == "tool_error", structuredContent={"newsResults": None},
-        )
-
-    session = AsyncMock()
-    session.call_tool.side_effect = call_tool
-    with pytest.raises(PublicError):
-        await WebIQ(session).search("news", 1, activity=activity, on_dispatch=dispatch)
-    assert activity.elapsed_ms == pytest.approx(125)
-    assert activity.response_received == (failure != "timeout")
-
-
-async def test_cancelled_mcp_call_times_until_abort_without_claiming_receipt(monkeypatch):
-    clock = [10.0]
-    monkeypatch.setattr("app.activity.perf_counter", lambda: clock[0])
-    activity = ToolActivity("session", "call", 1, "webiq.news")
-    in_flight = asyncio.Event()
-
-    async def call_tool(*_):
-        in_flight.set()
+    async def blocked(request):
+        started.set()
         await asyncio.Event().wait()
 
-    session = AsyncMock()
-    session.call_tool.side_effect = call_tool
-    task = asyncio.create_task(WebIQ(session).search("news", 1, activity=activity))
-    await asyncio.wait_for(in_flight.wait(), 1)
-    clock[0] = 12.5
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    async with httpx.AsyncClient(transport=httpx.MockTransport(blocked)) as client:
+        task = asyncio.create_task(WebIQ(client, "https://api.microsoft.ai/v3/auto").search(
+            "news", 1, activity=activity,
+        ))
+        await started.wait()
+        clock[0] += 2.5
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert activity.elapsed_ms == pytest.approx(2500)
     assert not activity.response_received
 
 
-async def test_invalid_query_never_claims_dispatch_or_elapsed_time():
-    activity = ToolActivity("session", "call", 1, "webiq.news")
-    session, dispatch = AsyncMock(), AsyncMock()
-    with pytest.raises(PublicError):
-        await WebIQ(session).search("", 1, activity=activity, on_dispatch=dispatch)
-    dispatch.assert_not_awaited()
-    session.call_tool.assert_not_awaited()
-    assert activity.started_at is None and activity.elapsed_ms is None
+@pytest.mark.parametrize("query", ["", " " * 10, "a" * 1001])
+async def test_invalid_queries_not_dispatched(query):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: pytest.fail("dispatched"))) as client:
+        with pytest.raises(PublicError) as error:
+            await WebIQ(client, "https://api.microsoft.ai/v3/auto").search(query, 1)
+    assert error.value.code == "invalid_query"

@@ -37,8 +37,6 @@ const connectionPending = element("connection-pending", HTMLDivElement);
 const connectionStage = element("connection-stage", HTMLSpanElement);
 const cancelConnectionButton = element("cancel-connection", HTMLButtonElement);
 const clock = element("session-clock", HTMLSpanElement);
-const signOutButton = element("sign-out", HTMLButtonElement);
-let logoutCsrf: string | null = null;
 let lastAudioResponseId: string | null = null;
 let playbackTimer: ReturnType<typeof setInterval> | undefined;
 const activityPanel = new ToolActivityPanel(
@@ -108,7 +106,7 @@ function referenceStatus(message: Message, next: CitationState): void {
     unavailable: "No supporting references selected for this answer.",
     cancelled: "Reference selection cancelled; this answer has no completed source selection.",
     failed: "References unavailable for the spoken answer.",
-    not_searched: "Answered without WebIQ search; not verified against live sources.",
+    not_searched: "Answered without Web IQ search; not verified against live sources.",
   };
   note.textContent = labels[next];
 }
@@ -118,7 +116,7 @@ function setState(next: State): void {
   document.body.dataset.state = next;
   const labels: Record<State, string> = {
     idle: "", connecting: "Connecting", listening: muted ? "Microphone muted" : speechMode ? "Listening" : "Ready for a question",
-    searching: "Searching WebIQ", thinking: "Preparing your briefing", speaking: "Speaking", error: "Needs attention",
+    searching: "Searching Web IQ", thinking: "Preparing your briefing", speaking: "Speaking", error: "Needs attention",
   };
   const captions: Record<State, string> = {
     idle: "Good questions deserve well-sourced answers.",
@@ -218,7 +216,7 @@ async function start(withMicrophone: boolean, text: string | null = null, submit
   if (moveStartFocus) cancelConnectionButton.focus();
   connectTimer = setTimeout(() => {
     if (session !== generation || ready) return;
-    showError("Connecting took too long. Check Azure login and WebIQ access, then try again.");
+    showError("Connecting took too long. Check Azure login and Web IQ access, then try again.");
     stop(true);
   }, 65_000);
   try {
@@ -395,7 +393,7 @@ function onEvent(event: Record<string, unknown>): void {
     selectedSources.clear();
     sourceList.replaceChildren();
     element("source-count", HTMLSpanElement).textContent = "0";
-    searchStatus.textContent = `Searching WebIQ news: ${textField(event, "query")}`;
+    searchStatus.textContent = `Searching Web IQ Auto: ${textField(event, "query")}`;
     setState("searching");
   } else if (type === "evidence") {
     sourceEvidence = readSources(event.sources);
@@ -413,7 +411,7 @@ function onEvent(event: Record<string, unknown>): void {
     if (pending || !sources.length) {
       selectedSources.clear();
       renderSources();
-      searchStatus.textContent = notSearched ? "The model answered without searching WebIQ. No live references." :
+      searchStatus.textContent = notSearched ? "The model answered without searching Web IQ. No live references." :
         pending ? "Speaking from retrieved evidence. References follow playback." : "No supporting references selected.";
       return;
     }
@@ -502,7 +500,7 @@ function getMessage(id: string, role: string, turn: number): Message {
   container.className = `message ${role === "user" ? "user" : "assistant"}`;
   const label = document.createElement("div");
   label.className = "message-label";
-  label.textContent = role === "user" ? "YOU" : "WEBIQ BRIEFING";
+  label.textContent = role === "user" ? "YOU" : "WEB IQ BRIEFING";
   const body = document.createElement("p");
   container.append(label, body);
   const message = { container, body, role, turn };
@@ -560,18 +558,8 @@ function renderSources(): void {
 async function refreshHealth(): Promise<void> {
   try {
     const response = await fetch("/api/health");
-    if (response.status === 401) {
-      stop();
-      location.replace("/login");
-      return;
-    }
     if (!response.ok) throw new Error("The voice server is not ready.");
     const health = parseObject(await response.json());
-    if (health.access && typeof health.access === "object") {
-      const access = parseObject(health.access);
-      signOutButton.hidden = access.hosted !== true;
-      logoutCsrf = typeof access.csrf === "string" ? access.csrf : null;
-    }
     const logging = health.performance_logging;
     const telemetryNotice = element("telemetry-notice", HTMLDivElement);
     if (logging && typeof logging === "object" && "state" in logging && logging.state === "warning") {
@@ -588,18 +576,6 @@ async function refreshHealth(): Promise<void> {
     setupBox.hidden = false;
   }
 }
-
-signOutButton.addEventListener("click", async () => {
-  if (!logoutCsrf) return;
-  stop();
-  try {
-    const response = await fetch("/api/logout", { method: "POST", headers: { "X-CSRF-Token": logoutCsrf } });
-    if (!response.ok) throw new Error("Could not sign out. Reload and retry.");
-    location.replace("/login");
-  } catch {
-    showError("Could not sign out. Reload and retry; access expires after one hour.");
-  }
-});
 
 startButton.addEventListener("click", () => { void start(true); });
 cancelConnectionButton.addEventListener("click", () => {

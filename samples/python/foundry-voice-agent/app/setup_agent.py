@@ -32,7 +32,7 @@ async def create(name: str, model: str, new_version: bool = False) -> None:
         try:
             created = await client.agents.create_version(agent_name=name, definition=definition(model))
         except HttpResponseError as exc:
-            # Agent creation contains no WebIQ credentials or user content.
+            # Agent creation contains no Web IQ credentials or user content.
             print(f"Native voice creation rejected: HTTP {exc.status_code}; {exc.message}")
             raise SystemExit(1) from None
         AGENT_FILE.parent.mkdir(exist_ok=True)

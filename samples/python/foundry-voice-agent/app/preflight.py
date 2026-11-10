@@ -1,11 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Check local setup; --online adds read-only agent lookup and MCP discovery, never search or voice."""
+"""Check local setup; --online adds read-only agent lookup, never search or voice."""
 
 import argparse
 import asyncio
-import os
 import shutil
 import subprocess
 import sys
@@ -13,9 +12,9 @@ from pathlib import Path
 
 from azure.ai.projects.aio import AIProjectClient
 
+from app.agent_validation import validate_agent
 from app.config import ROOT, Settings
-from app.main import credential_for, prepare_services, public_error
-from app.performance import PerformanceTrace
+from app.main import credential_for, public_error
 
 
 def local_checks(settings: Settings, root: Path = ROOT) -> list[tuple[bool, str]]:
@@ -23,8 +22,6 @@ def local_checks(settings: Settings, root: Path = ROOT) -> list[tuple[bool, str]
         (sys.version_info >= (3, 11), "Python 3.11 or later."),
         (bool(shutil.which("az")), "Azure CLI on PATH; install it and run az login if missing."),
         (bool(shutil.which("npm")), "npm on PATH; install Node.js 22.12 or later if missing."),
-        (not settings.perf_log_enabled or all(hasattr(os, name) for name in ("O_NOFOLLOW", "fchmod")),
-         "Private disk logging supported or disabled; on native Windows set PERF_LOG_ENABLED=0."),
         (bool(settings.webiq_key) and "<" not in settings.webiq_key,
          "Web IQ key is set and is not an example placeholder; authentication is not yet verified."),
         ((root / "dist" / "index.html").is_file()
@@ -55,9 +52,8 @@ async def online_check(settings: Settings) -> None:
             settings.project_endpoint, credential=credential, allow_preview=True,
             retry_total=0, connection_timeout=15, read_timeout=20,
         ) as client,
-        prepare_services(client, settings, PerformanceTrace()),
     ):
-        pass
+        await validate_agent(client, settings)
 
 
 async def run(online: bool = False) -> int:
@@ -84,11 +80,12 @@ async def run(online: bool = False) -> int:
         print("FAIL agent configuration: run app.setup_agent or set both agent overrides.")
         return 1
     except Exception as exc:  # noqa: BLE001 -- CLI boundary never prints raw service errors
-        error = public_error(exc, hosted=settings.hosted)
+        error = public_error(exc)
         print(f"FAIL {error.code}: {error.message}")
         return 1
-    print("PASS Foundry agent access, latest version, kind=voice, store=False, and Web IQ news-tool discovery.")
-    print("No agent created, search submitted, or voice session opened. Runtime voice access is not verified.")
+    print("PASS Foundry agent access, latest version, kind=voice, and store=False.")
+    print("No agent created, search submitted, or voice session opened.")
+    print("Auto entitlement and runtime voice access are not verified.")
     return 0
 
 

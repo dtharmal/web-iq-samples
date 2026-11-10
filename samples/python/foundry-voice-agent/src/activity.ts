@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-type Tool = "webiq.news" | "cite_sources";
+type Tool = "webiq.auto" | "cite_sources";
 type BackendState = "running" | "completed" | "failed" | "cancelled";
-type Scope = "mcp_round_trip" | "local_citation_validation";
+type Scope = "auto_round_trip" | "local_citation_validation";
 export type ActivityEvent = {
   session_id: string; call_id: string; turn: number; tool: Tool; state: BackendState;
   scope: Scope; elapsed_ms: number | null; source_count: number | null; response_received: boolean;
@@ -13,10 +13,10 @@ type Entry = Omit<ActivityEvent, "state"> & {
 };
 
 const descriptions: Record<Scope, string> = {
-  mcp_round_trip: "Backend MCP call dispatch to SDK response receipt (or abort). Includes transport and MCP decoding. Excludes connection setup, model generation, citation processing and audio.",
-  local_citation_validation: "Local source-ID validation only; not WebIQ search latency. Excludes model generation, returning the tool output to Foundry and audio.",
+  auto_round_trip: "Backend Auto request dispatch to HTTP response receipt (or abort). Includes transport and response download. Excludes connection setup, model generation, citation processing and audio.",
+  local_citation_validation: "Local source-ID validation only; not Web IQ search latency. Excludes model generation, returning the tool output to Foundry and audio.",
 };
-const names: Record<Tool, string> = { "webiq.news": "WebIQ news", cite_sources: "Select citations" };
+const names: Record<Tool, string> = { "webiq.auto": "Web IQ Auto", cite_sources: "Select citations" };
 const key = (event: Pick<ActivityEvent, "session_id" | "call_id">) => `${event.session_id}:${event.call_id}`;
 
 export function parseActivity(value: Record<string, unknown>): ActivityEvent {
@@ -25,10 +25,10 @@ export function parseActivity(value: Record<string, unknown>): ActivityEvent {
     typeof session_id !== "string" || !session_id || session_id.length > 128 ||
     typeof call_id !== "string" || !call_id || call_id.length > 200 ||
     typeof turn !== "number" || !Number.isInteger(turn) || turn < 1 || turn > 40 ||
-    (tool !== "webiq.news" && tool !== "cite_sources") ||
+    (tool !== "webiq.auto" && tool !== "cite_sources") ||
     (state !== "running" && state !== "completed" && state !== "failed" && state !== "cancelled") ||
-    (scope !== "mcp_round_trip" && scope !== "local_citation_validation") ||
-    scope !== (tool === "webiq.news" ? "mcp_round_trip" : "local_citation_validation") ||
+    (scope !== "auto_round_trip" && scope !== "local_citation_validation") ||
+    scope !== (tool === "webiq.auto" ? "auto_round_trip" : "local_citation_validation") ||
     (elapsed_ms !== null && (typeof elapsed_ms !== "number" || !Number.isFinite(elapsed_ms) || elapsed_ms < 0)) ||
     (source_count !== null && (typeof source_count !== "number" || !Number.isInteger(source_count) || source_count < 0 || source_count > 5)) ||
     typeof response_received !== "boolean"
@@ -78,8 +78,8 @@ function outcome(entry: Entry): string {
     entry.elapsed_ms === null ? "Cancelled · Final timing unavailable" : "Cancelled · Time until abort";
   if (entry.state === "failed") return entry.elapsed_ms === null ? "Failed · Not dispatched" : "Failed";
   const count = entry.source_count;
-  return `${entry.tool === "webiq.news" ? "Returned" : "Completed"}${count === null ? "" :
-    ` · ${count} ${entry.tool === "webiq.news" ? "usable sources" : "sources selected"}`}`;
+  return `${entry.tool === "webiq.auto" ? "Returned" : "Completed"}${count === null ? "" :
+    ` · ${count} ${entry.tool === "webiq.auto" ? "usable sources" : "sources selected"}`}`;
 }
 
 export class ToolActivityPanel {
@@ -110,7 +110,7 @@ export class ToolActivityPanel {
     this.list.replaceChildren();
     for (const entry of this.history.entries) {
       const row = document.createElement("li");
-      row.className = `tool-row ${entry.tool === "webiq.news" ? "search-tool" : "citation-tool"}`;
+      row.className = `tool-row ${entry.tool === "webiq.auto" ? "search-tool" : "citation-tool"}`;
       row.dataset.state = entry.state;
       row.dataset.callId = entry.call_id;
       row.dataset.turn = String(entry.turn);
@@ -132,7 +132,7 @@ export class ToolActivityPanel {
       status.textContent = outcome(entry);
       const scope = document.createElement("span");
       scope.className = "tool-scope";
-      scope.textContent = entry.tool === "webiq.news" ? "MCP round-trip" : "Local validation · not search";
+      scope.textContent = entry.tool === "webiq.auto" ? "Auto round-trip" : "Local validation · not search";
       detail.append(heading, status, scope);
       const duration = document.createElement("strong");
       duration.className = "tool-duration";

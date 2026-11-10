@@ -21,9 +21,9 @@ from pathlib import Path
 from uuid import uuid4
 
 EVENTS = frozenset(["session_open", "session_end", "stage_start", "stage_end", "ready", "turn_start", "turn_end", "speech_stopped", "input_committed", "transcription_ready", "model_requested", "model_sent", "model_created", "function_ready", "model_done", "tool_request", "tool_dispatched", "tool_returned", "tool_finished", "tool_output_sent", "first_text", "first_audio", "first_audio_forwarded", "notification_sent", "client_audio_received", "client_playback_started", "client_playback_unavailable", "client_ui_render", "playback_ack", "stale_event", "error"])
-STAGES = frozenset(["mcp_setup", "mcp_initialize", "mcp_discovery", "agent_lookup", "voice_connect", "input_submit", "search", "cite", "answer", "greeting", "activity_ui", "evidence_ui", "answer_ui"])
+STAGES = frozenset(["webiq_setup", "agent_lookup", "voice_connect", "input_submit", "search", "cite", "answer", "greeting", "activity_ui", "evidence_ui", "answer_ui"])
 OUTCOMES = frozenset(["success", "failed", "cancelled", "discarded", "ended", "disconnected", "unavailable"])
-ERROR_CODES = frozenset(["agent_not_configured", "agent_config", "agent_version", "azure_auth", "azure_http", "azure_connection", "session_timeout", "session_error", "voice_timeout", "invalid_audio", "invalid_input", "browser_disconnected", "voice_closed", "voice_disconnected", "turn_limit", "audio_rate", "message_rate", "not_ready", "empty_text", "foundry_event", "voice_config", "unexpected_response", "voice_audio", "audio_limit", "tool_protocol", "tool_loop", "tool_arguments", "webiq_failure", "webiq_schema", "webiq_size", "webiq_timeout", "webiq_mcp", "webiq_not_configured", "invalid_query", "webiq_tool", "webiq_http_401", "webiq_http_403", "webiq_http_429", "no_evidence", "transcription_failed", "response_incomplete", "session_busy", "other_error"])
+ERROR_CODES = frozenset(["agent_not_configured", "agent_config", "agent_version", "azure_auth", "azure_http", "azure_connection", "session_timeout", "session_error", "voice_timeout", "invalid_audio", "invalid_input", "browser_disconnected", "voice_closed", "voice_disconnected", "turn_limit", "audio_rate", "message_rate", "not_ready", "empty_text", "foundry_event", "voice_config", "unexpected_response", "voice_audio", "audio_limit", "tool_protocol", "tool_loop", "tool_arguments", "webiq_failure", "webiq_schema", "webiq_size", "webiq_timeout", "webiq_auto", "webiq_not_configured", "invalid_query", "webiq_tool", "webiq_http_401", "webiq_http_403", "webiq_http_429", "no_evidence", "transcription_failed", "response_incomplete", "session_busy", "other_error"])
 METRICS = frozenset(["duration_ms", "since_turn_ms", "since_speech_stop_ms", "since_model_request_ms", "browser_submit_to_receipt_ms", "browser_submit_to_playback_ms", "browser_receipt_to_playback_ms", "browser_schedule_lead_ms", "browser_output_latency_ms", "browser_render_ms"])
 ERROR_KINDS = frozenset({
     "TimeoutError", "ClientConnectionError", "ServerTimeoutError", "ClientConnectionResetError",
@@ -50,6 +50,8 @@ class PrivateRotatingHandler(RotatingFileHandler):
             if candidate.is_symlink():
                 raise ValueError("Unsafe log file")
             if candidate.exists():
+                if not hasattr(os, "O_NOFOLLOW"):
+                    raise ValueError("Cannot safely reopen an existing log file on this platform")
                 info = candidate.stat()
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > max_bytes:
                     raise ValueError("Unexpected existing log file")
@@ -58,12 +60,16 @@ class PrivateRotatingHandler(RotatingFileHandler):
         self.setFormatter(logging.Formatter("%(message)s"))
 
     def _open(self):
-        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        # Without O_NOFOLLOW, exclusively create a new file rather than risk following a link.
+        flags |= getattr(os, "O_NOFOLLOW", 0) or os.O_EXCL
+        fd = os.open(self.baseFilename, flags, 0o600)
         try:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise ValueError("Unsafe log file")
-            os.fchmod(fd, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
             return os.fdopen(fd, "a", encoding="utf-8")
         except BaseException:
             os.close(fd)

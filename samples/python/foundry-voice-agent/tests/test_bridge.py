@@ -7,8 +7,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from mcp.types import CallToolResult
 
 from app.agent import definition
 from app.bridge import Bridge
@@ -160,6 +160,23 @@ async def test_typed_turn_allows_search_or_audio_only_after_playback_ack(bridge)
     assert emitted(bridge, "transcript")[0]["role"] == "user"
 
 
+@pytest.mark.parametrize("stage", ["respond", "answer", "cite"])
+async def test_every_response_keeps_evidence_quotation_limits(bridge, stage):
+    await bridge.request_response(stage)
+    instructions = bridge.conn.response.create.call_args.kwargs["response"]["instructions"]
+    assert "do not read retrieved text aloud" in instructions
+    assert "at most one short phrase per source" in instructions
+
+
+def test_agent_definition_uses_auto_and_bounded_evidence_instructions():
+    agent = definition("test-only").as_dict()
+    assert "Web IQ Briefing" in agent["instructions"]
+    assert "do not read retrieved text aloud" in agent["instructions"]
+    assert "at most one short phrase per source" in agent["instructions"]
+    assert "Web IQ Auto" in agent["tools"][0]["description"]
+    assert agent["store"] is False
+
+
 @pytest.mark.parametrize("model", ["gpt-realtime-2.1-global-standard", "gpt-realtime-1.5-global-standard"])
 async def test_search_speak_playback_select_has_actual_answer_citation_link(bridge, model):
     bridge.ready = False
@@ -181,6 +198,8 @@ async def test_search_speak_playback_select_has_actual_answer_citation_link(brid
     answer_request = bridge.conn.response.create.call_args.kwargs["response"]
     assert answer_request["tool_choice"] == "none"
     assert "do not provide news facts" not in answer_request["instructions"]
+    assert "do not read retrieved text aloud" in answer_request["instructions"]
+    assert "at most one short phrase per source" in answer_request["instructions"]
     assert "tools" not in answer_request
     await created(bridge, "r2")
     answer = emitted(bridge, "answer")[0]
@@ -439,7 +458,7 @@ async def test_forged_citation_is_rejected(bridge):
 
 async def test_webiq_failure_cannot_become_factual_answer(bridge):
     bridge.turn = 1
-    await bridge.tool_finished(1, {"call_id": "c"}, PublicError("webiq_timeout", "WebIQ timed out."))
+    await bridge.tool_finished(1, {"call_id": "c"}, PublicError("webiq_timeout", "Web IQ timed out."))
     request = bridge.conn.response.create.call_args.kwargs["response"]
     assert "do not provide news facts" in request["instructions"]
     assert not bridge.selected
@@ -546,11 +565,12 @@ async def publish_running(bridge):
     return event
 
 
-def mcp_result():
-    valid = {"title": "Title", "url": "https://example.org/a", "content": "PRIVATE EVIDENCE"}
-    return CallToolResult(content=[], structuredContent={
-        "newsResults": [valid, valid, {**valid, "url": "javascript:invalid"}],
-    })
+def auto_result():
+    valid = {"title": "Title", "url": "https://example.org/a"}
+    return httpx.Response(200, json={"results": [{
+        "evidence": {"type": "text", "content": "PRIVATE EVIDENCE"},
+        "citations": [valid, valid, {**valid, "url": "javascript:invalid"}],
+    }]}, request=httpx.Request("POST", "https://api.microsoft.ai/v3/auto"))
 
 
 async def test_live_tool_lifecycle_dispatch_before_return_and_usable_source_count(bridge, monkeypatch):
@@ -558,14 +578,14 @@ async def test_live_tool_lifecycle_dispatch_before_return_and_usable_source_coun
     monkeypatch.setattr("app.activity.perf_counter", lambda: clock[0])
     release = asyncio.Event()
 
-    async def call_tool(*_):
+    async def call_tool(*_, **__):
         await release.wait()
         clock[0] = 10.321
-        return mcp_result()
+        return auto_result()
 
     session = AsyncMock()
-    session.call_tool.side_effect = call_tool
-    bridge.webiq = WebIQ(session)
+    session.post.side_effect = call_tool
+    bridge.webiq = WebIQ(session, "https://api.microsoft.ai/v3/auto")
     await dispatch_search(bridge)
     await publish_running(bridge)
     events = emitted(bridge, "tool_activity")
@@ -581,7 +601,7 @@ async def test_live_tool_lifecycle_dispatch_before_return_and_usable_source_coun
     assert events[-1]["elapsed_ms"] == pytest.approx(321)
     assert events[-1]["source_count"] == 1
     assert events[-1]["response_received"]
-    assert events[-1]["scope"] == "mcp_round_trip"
+    assert events[-1]["scope"] == "auto_round_trip"
     assert {(e["session_id"], e["call_id"], e["turn"]) for e in events} == {
         (bridge.session_id, "timed", 1),
     }
@@ -596,16 +616,16 @@ async def test_interrupt_cannot_resurrect_stale_dispatch_or_completion(bridge, m
     monkeypatch.setattr("app.activity.perf_counter", lambda: clock[0])
     started = asyncio.Event()
 
-    async def call_tool(*_):
+    async def call_tool(*_, **__):
         started.set()
         if returned:
             clock[0] = 10.2
-            return mcp_result()
+            return auto_result()
         await asyncio.Event().wait()
 
     session = AsyncMock()
-    session.call_tool.side_effect = call_tool
-    bridge.webiq = WebIQ(session)
+    session.post.side_effect = call_tool
+    bridge.webiq = WebIQ(session, "https://api.microsoft.ai/v3/auto")
     await dispatch_search(bridge)
     await asyncio.wait_for(started.wait(), 1)
     if returned:
@@ -629,13 +649,13 @@ async def test_failed_search_emits_failed_timing_not_completion(bridge, monkeypa
     clock = [1.0]
     monkeypatch.setattr("app.activity.perf_counter", lambda: clock[0])
 
-    async def call_tool(*_):
+    async def call_tool(*_, **__):
         clock[0] = 1.5
         raise TimeoutError
 
     session = AsyncMock()
-    session.call_tool.side_effect = call_tool
-    bridge.webiq = WebIQ(session)
+    session.post.side_effect = call_tool
+    bridge.webiq = WebIQ(session, "https://api.microsoft.ai/v3/auto")
     await dispatch_search(bridge)
     await bridge.tool_task
     await publish_running(bridge)

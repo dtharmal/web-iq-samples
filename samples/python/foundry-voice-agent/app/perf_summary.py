@@ -20,7 +20,7 @@ def summarize(records: list[dict]) -> list[dict]:
         def overlap_with(stage):
             intervals = [
                 (first("stage_start", stage=s).get("monotonic_ms"), first("stage_end", stage=s).get("monotonic_ms"))
-                for s in ("mcp_setup", stage)
+                for s in ("webiq_setup", stage)
             ]
             if not all(start is not None and end is not None for start, end in intervals):
                 return None
@@ -32,11 +32,11 @@ def summarize(records: list[dict]) -> list[dict]:
             "azure_auth_ms": round(sum(r["duration_ms"] for r in rows
                                        if r["event"] == "stage_end" and r.get("stage") == "azure_auth"), 3)
             if any(r.get("stage") == "azure_auth" for r in rows) else None,
-            "mcp_agent_setup_overlap_ms": overlap_with("agent_lookup"),
-            "mcp_voice_connect_overlap_ms": overlap_with("voice_connect"),
+            "webiq_agent_setup_overlap_ms": overlap_with("agent_lookup"),
+            "webiq_voice_connect_overlap_ms": overlap_with("voice_connect"),
             "setup_ms": {
                 stage: first("stage_end", stage=stage).get("duration_ms")
-                for stage in ("mcp_setup", "mcp_initialize", "mcp_discovery", "agent_lookup", "agent_cache", "voice_connect")
+                for stage in ("webiq_setup", "agent_lookup", "agent_cache", "voice_connect")
             },
             "turns": [],
         }

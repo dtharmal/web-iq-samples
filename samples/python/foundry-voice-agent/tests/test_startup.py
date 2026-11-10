@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import anyio
 import pytest
 
 from app import main
@@ -33,10 +32,10 @@ class Connection:
 class Startup:
     def __init__(self, monkeypatch, *, greeting=None):
         self.allow_agent = asyncio.Event()
-        self.allow_mcp = asyncio.Event()
+        self.allow_webiq = asyncio.Event()
         self.allow_voice = asyncio.Event()
         self.agent_started = asyncio.Event()
-        self.mcp_started = asyncio.Event()
+        self.webiq_started = asyncio.Event()
         self.voice_started = asyncio.Event()
         self.voice_opened = asyncio.Event()
         self.closed = set()
@@ -63,20 +62,18 @@ class Startup:
                 self.closed.add("lookup")
 
         @asynccontextmanager
-        async def mcp(*args, **kwargs):
-            self.owners["mcp"] = asyncio.current_task()
-            self.mcp_started.set()
+        async def webiq(*args, **kwargs):
+            self.owners["webiq"] = asyncio.current_task()
+            self.webiq_started.set()
             try:
-                # Exercise the same-task/LIFO cancel-scope requirement of the MCP SDK.
-                with anyio.CancelScope():
-                    await self.agent_started.wait()
-                    await self.allow_mcp.wait()
-                    if self.fail == "mcp":
-                        raise PublicError("webiq_timeout", "Synthetic MCP timeout")
-                    yield self.webiq
+                await self.agent_started.wait()
+                await self.allow_webiq.wait()
+                if self.fail == "webiq":
+                    raise PublicError("webiq_timeout", "Synthetic Web IQ timeout")
+                yield self.webiq
             finally:
-                assert asyncio.current_task() is self.owners["mcp"]
-                self.closed.add("mcp")
+                assert asyncio.current_task() is self.owners["webiq"]
+                self.closed.add("webiq")
 
         @asynccontextmanager
         async def native(**kwargs):
@@ -102,15 +99,15 @@ class Startup:
             agents=SimpleNamespace(get=AsyncMock(side_effect=get)),
             beta=SimpleNamespace(voice_agents=SimpleNamespace(realtime=SimpleNamespace(connect=native))),
         )
-        monkeypatch.setattr(main.WebIQ, "connect", mcp)
+        monkeypatch.setattr(main.WebIQ, "connect", webiq)
         self.settings = Settings(agent_name="test-agent", agent_version="7")
 
     async def opened(self):
-        await asyncio.gather(self.agent_started.wait(), self.mcp_started.wait())
+        await asyncio.gather(self.agent_started.wait(), self.webiq_started.wait())
 
     def release(self):
         self.allow_agent.set()
-        self.allow_mcp.set()
+        self.allow_webiq.set()
         self.allow_voice.set()
 
     @asynccontextmanager
@@ -122,7 +119,7 @@ class Startup:
 
 
 @pytest.mark.parametrize("greeting", [None, "template", "llm_generated"])
-async def test_connect_overlaps_slow_mcp_but_never_precedes_agent_validation(monkeypatch, greeting):
+async def test_connect_overlaps_slow_webiq_but_never_precedes_agent_validation(monkeypatch, greeting):
     startup = Startup(monkeypatch, greeting=greeting)
     handed_off = asyncio.Event()
     release = asyncio.Event()
@@ -139,26 +136,26 @@ async def test_connect_overlaps_slow_mcp_but_never_precedes_agent_validation(mon
     startup.allow_agent.set()
     startup.allow_voice.set()
     await startup.voice_opened.wait()
-    assert not startup.allow_mcp.is_set() and not handed_off.is_set()
+    assert not startup.allow_webiq.is_set() and not handed_off.is_set()
     # Early native events remain ordered and unread until the complete handoff.
     for event in ("session.updated", "response.created", "response.output_audio.delta", "response.done"):
         startup.events.put_nowait({"type": event})
-    startup.allow_mcp.set()
+    startup.allow_webiq.set()
     await handed_off.wait()
     assert [startup.events.get_nowait()["type"] for _ in range(4)] == [
         "session.updated", "response.created", "response.output_audio.delta", "response.done",
     ]
-    assert startup.owners["mcp"] is task and startup.owners["voice"] is not task
+    assert startup.owners["webiq"] is task and startup.owners["voice"] is not task
     release.set()
     await task
-    assert startup.closed == {"lookup", "mcp", "voice"}
+    assert startup.closed == {"lookup", "webiq", "voice"}
 
 
 @pytest.mark.parametrize("field,value,code", [
     ("kind", "prompt", "agent_config"), ("store", True, "agent_config"),
     ("store", None, "agent_config"), ("version", "6", "agent_version"),
 ])
-async def test_agent_rejection_immediately_cancels_blocked_mcp_without_voice(monkeypatch, field, value, code):
+async def test_agent_rejection_immediately_cancels_blocked_webiq_without_voice(monkeypatch, field, value, code):
     startup = Startup(monkeypatch)
     setattr(startup, field, value)
     startup.allow_agent.set()
@@ -167,7 +164,7 @@ async def test_agent_rejection_immediately_cancels_blocked_mcp_without_voice(mon
             pytest.fail("Invalid agent admitted")
     assert main.public_error(error.value).code == code
     assert not startup.voice_started.is_set()
-    assert startup.closed == {"lookup", "mcp"}
+    assert startup.closed == {"lookup", "webiq"}
 
 
 @pytest.mark.parametrize("greeting", [None, "template", "llm_generated"])
@@ -177,15 +174,15 @@ async def test_fresh_cache_skips_remote_lookup_and_preserves_greeting_and_cleanu
     cache.store(startup.settings, greeting, main.time.monotonic())
     monkeypatch.setattr(main, "agent_validation", cache)
     startup.release()
-    # MCP test helper waits for lookup start; cache-hit path deliberately never calls it.
+    # Web IQ test helper waits for lookup start; cache-hit path deliberately never calls it.
     startup.agent_started.set()
     async with startup.services() as (_, conn, mode):
         assert conn is startup.conn and mode == greeting
         startup.client.agents.get.assert_not_awaited()
-    assert startup.closed == {"mcp", "voice"}
+    assert startup.closed == {"webiq", "voice"}
 
 
-@pytest.mark.parametrize("state", ["expired", "mismatch", "failed", "hosted"])
+@pytest.mark.parametrize("state", ["expired", "mismatch", "failed"])
 async def test_unusable_cache_falls_back_to_real_validation_before_voice(monkeypatch, state):
     startup = Startup(monkeypatch)
     cache = AgentValidationCache()
@@ -194,8 +191,6 @@ async def test_unusable_cache_falls_back_to_real_validation_before_voice(monkeyp
         startup.settings = Settings(agent_name="test-agent", agent_version="8")
     elif state == "failed":
         cache.invalidate("azure_auth")
-    elif state == "hosted":
-        startup.settings = Settings(mode="hosted", agent_name="test-agent", agent_version="7")
     monkeypatch.setattr(main, "agent_validation", cache)
     startup.store = True
     startup.allow_agent.set()
@@ -207,24 +202,24 @@ async def test_unusable_cache_falls_back_to_real_validation_before_voice(monkeyp
     assert cache.entry is None
 
 
-@pytest.mark.parametrize("failure", ["agent", "mcp", "voice"])
+@pytest.mark.parametrize("failure", ["agent", "webiq", "voice"])
 async def test_failure_or_timeout_cancels_sibling_startup(monkeypatch, failure):
     startup = Startup(monkeypatch)
     startup.fail = failure
     startup.allow_agent.set()
-    if failure == "mcp":
-        startup.allow_mcp.set()
+    if failure == "webiq":
+        startup.allow_webiq.set()
     elif failure == "voice":
         startup.allow_voice.set()
     with pytest.raises(ExceptionGroup):
         async with startup.services():
             pytest.fail("Failed startup admitted")
-    assert {"lookup", "mcp"} <= startup.closed
+    assert {"lookup", "webiq"} <= startup.closed
     if startup.voice_started.is_set():
         assert "voice" in startup.closed
 
 
-@pytest.mark.parametrize("phase", ["lookup", "connecting", "mcp_pending", "voice_pending", "ready"])
+@pytest.mark.parametrize("phase", ["lookup", "connecting", "webiq_pending", "voice_pending", "ready"])
 async def test_cancellation_closes_all_owned_scopes_and_leaves_no_children(monkeypatch, phase):
     startup = Startup(monkeypatch)
     handoff = asyncio.Event()
@@ -240,17 +235,17 @@ async def test_cancellation_closes_all_owned_scopes_and_leaves_no_children(monke
     if phase != "lookup":
         startup.allow_agent.set()
         await startup.voice_started.wait()
-    if phase in {"mcp_pending", "ready"}:
+    if phase in {"webiq_pending", "ready"}:
         startup.allow_voice.set()
         await startup.voice_opened.wait()
     if phase in {"voice_pending", "ready"}:
-        startup.allow_mcp.set()
+        startup.allow_webiq.set()
     if phase == "ready":
         await handoff.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert {"lookup", "mcp"} <= startup.closed
+    assert {"lookup", "webiq"} <= startup.closed
     if startup.voice_started.is_set():
         assert "voice" in startup.closed
     assert not (asyncio.all_tasks() - before - {asyncio.current_task()})
@@ -264,8 +259,8 @@ async def test_outer_deadline_cleans_up_both_connections(monkeypatch):
         async with asyncio.timeout(.02), main.prepare_services(
             startup.client, startup.settings, PerformanceTrace(),
         ):
-            pytest.fail("MCP is not ready")
-    assert startup.closed == {"lookup", "mcp", "voice"}
+            pytest.fail("Web IQ is not ready")
+    assert startup.closed == {"lookup", "webiq", "voice"}
 
 
 @pytest.mark.parametrize("phase", ["lookup", "voice"])
@@ -279,7 +274,7 @@ async def test_real_startup_deadlines_cancel_blocked_sibling_and_close_resources
         async with startup.services():
             pytest.fail("Incomplete startup admitted")
     assert main.public_error(error.value).code == "session_timeout"
-    assert {"lookup", "mcp"} <= startup.closed
+    assert {"lookup", "webiq"} <= startup.closed
     if phase == "voice":
         assert "voice" in startup.closed
 
@@ -292,7 +287,7 @@ async def test_unsupported_greeting_rejected_before_native_connection(monkeypatc
             pytest.fail("Unknown greeting admitted")
     assert main.public_error(error.value).code == "agent_config"
     assert not startup.voice_started.is_set()
-    assert startup.closed == {"lookup", "mcp"}
+    assert startup.closed == {"lookup", "webiq"}
 
 
 async def test_effective_ready_ack_and_greeting_are_consumed_after_full_handoff(monkeypatch):
@@ -335,13 +330,13 @@ async def test_effective_ready_ack_and_greeting_are_consumed_after_full_handoff(
     assert not consumed.is_set()
     ws.send_json.assert_not_awaited()
     startup.conn.input_audio_buffer.append.assert_not_awaited()
-    startup.allow_mcp.set()
+    startup.allow_webiq.set()
     await task
     assert consumed.is_set()
-    assert startup.closed == {"lookup", "mcp", "voice"}
+    assert startup.closed == {"lookup", "webiq", "voice"}
 
 
-@pytest.mark.parametrize("action", ["disconnect", "end", "logout", "mcp_failure", "voice_failure"])
+@pytest.mark.parametrize("action", ["disconnect", "end", "webiq_failure", "voice_failure"])
 async def test_endpoint_cleanup_releases_admission_during_overlapped_startup(monkeypatch, action):
     startup = Startup(monkeypatch)
     startup.allow_agent.set()
@@ -357,10 +352,8 @@ async def test_endpoint_cleanup_releases_admission_during_overlapped_startup(mon
     async def client(*args, **kwargs):
         yield startup.client
 
-    login = SimpleNamespace(subject="test-login", revoked=asyncio.Event(), expires=float("inf"))
     monkeypatch.setattr(main, "credential_for", credential)
     monkeypatch.setattr(main, "AIProjectClient", client)
-    monkeypatch.setattr(main, "get_access", lambda _: SimpleNamespace(lookup=lambda _: login))
     inbound = asyncio.Queue()
     ws = SimpleNamespace(
         headers={"host": "127.0.0.1:8765", "origin": "http://127.0.0.1:8765"},
@@ -374,16 +367,14 @@ async def test_endpoint_cleanup_releases_admission_during_overlapped_startup(mon
     await startup.voice_started.wait()
     if action != "voice_failure":
         await startup.voice_opened.wait()
-    if action == "logout":
-        login.revoked.set()
-    elif action == "mcp_failure":
-        startup.fail = "mcp"
-        startup.allow_mcp.set()
+    if action == "webiq_failure":
+        startup.fail = "webiq"
+        startup.allow_webiq.set()
     elif action in {"end", "disconnect"}:
         inbound.put_nowait({"type": "websocket.disconnect"} if action == "disconnect" else {
             "type": "websocket.receive", "text": '{"type":"end"}',
         })
     await asyncio.wait_for(task, 1)
     assert not main.admission.active
-    assert startup.closed == {"lookup", "mcp", "voice"}
+    assert startup.closed == {"lookup", "webiq", "voice"}
     ws.close.assert_awaited_once()
