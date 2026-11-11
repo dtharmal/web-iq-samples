@@ -1,0 +1,25 @@
+{
+  "name": "Microsoft",
+  "pages": [
+    {
+      "title": "Data location",
+      "url": "https://www.microsoft.com/en-us/trust-center/privacy/data-location"
+    },
+    {
+      "title": "Privacy principles",
+      "url": "https://www.microsoft.com/en-us/trust-center/privacy"
+    },
+    {
+      "title": "Compliance offerings",
+      "url": "https://learn.microsoft.com/en-us/compliance/regulatory/offering-home"
+    },
+    {
+      "title": "Encryption and key management",
+      "url": "https://learn.microsoft.com/en-us/compliance/assurance/assurance-encryption"
+    },
+    {
+      "title": "Data retention, deletion, and destruction",
+      "url": "https://learn.microsoft.com/en-us/compliance/assurance/assurance-data-retention-deletion-and-destruction-overview"
+    }
+  ]
+}

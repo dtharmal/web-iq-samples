@@ -1,0 +1,19 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+subscription_id     = "<azure-subscription-id>"
+resource_group_name = "<resource-group>"
+account_name        = "<globally-unique-account-name>"
+
+# Optional: set to true to create the resource group. terraform destroy then
+# deletes the resource group and everything in it.
+create_resource_group = false
+location              = "eastus2"
+
+# Applied to the resource group only when create_resource_group is true.
+tags = {
+  environment = "sample"
+}
+
+# API keys are created in the Web IQ portal after you connect the resource ID.
+# Don't put API keys in this file or in Terraform state.

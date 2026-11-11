@@ -1,0 +1,8 @@
+{
+  "includeSites": [
+    "learn.microsoft.com/en-us/entra"
+  ],
+  "excludeSites": [
+    "learn.microsoft.com/en-us/entra/identity/monitoring-health"
+  ]
+}

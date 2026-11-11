@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webiq-named-scopes"
+version = "0.1.0"
+description = "Manage named Web IQ scopes and use them with the web search endpoint."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "azure-identity>=1.25,<2",
+    "httpx>=0.28,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+webiq-scopes = "webiq_scopes:entrypoint"
+
+[tool.setuptools]
+py-modules = ["webiq_scopes"]
+package-dir = {"" = "src"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

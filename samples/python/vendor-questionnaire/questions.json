@@ -1,0 +1,12 @@
+{
+  "questions": [
+    "Where is customer data stored, and can the customer choose the region?",
+    "How long is customer data kept after the contract ends?",
+    "Which security and privacy certifications or attestations does the vendor hold?",
+    "Is customer data encrypted at rest and in transit?",
+    "Does the vendor use subprocessors, and where is the list published?",
+    "How and when are customers notified of a security breach?",
+    "How can a customer request deletion of their data?",
+    "Is customer data used to train AI models?"
+  ]
+}

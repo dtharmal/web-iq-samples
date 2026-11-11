@@ -4,11 +4,11 @@ Runnable examples for building applications with Microsoft Web IQ.
 
 ## Project status
 
-This repository includes the runnable Market briefing, Foundry Voice Agent, and
-APIM managed identity gateway samples listed below. These are educational samples,
-not production-ready reference architectures. Review each sample's security, cost, and operational
-requirements before use or deployment. No third-party source code is vendored;
-the samples install their dependencies separately.
+This repository includes the runnable code and deployment samples listed below.
+These are educational samples, not production-ready reference architectures.
+Review each sample's security, cost, and operational requirements before use
+or deployment. No third-party source code is vendored; the samples install
+their dependencies separately.
 
 ## Samples
 
@@ -27,7 +27,12 @@ run instructions, and validation steps.
 |---|---|---|---|
 | [Web IQ + Foundry Voice Agent](samples/python/foundry-voice-agent/) | Python, TypeScript | Native Microsoft Foundry voice agent that decides when to search Web IQ Auto web and news evidence and shows cited sources after speaking. Choose a compatible model; model usage is a separate cost. | Bounded local timing/count logs are disabled by default; set `PERF_LOG_ENABLED=1` to enable. [Privacy and retention guidance](samples/python/foundry-voice-agent/README.md#telemetry). No telemetry is sent to repository maintainers. |
 | [Market briefing](samples/python/market-briefing/) | Python | Uses Web IQ web and news passages to generate a cited Markdown briefing. Azure OpenAI is the example model provider; other chat models require small integration changes. Model usage is a separate cost. Supports API-key or certificate-based Microsoft Entra authentication for Web IQ. | Local stderr diagnostics include search queries and returned URLs; [review and redact before sharing](samples/python/market-briefing/docs/troubleshooting.md#share-diagnostics-safely). |
+| [Vendor security questionnaire](samples/python/vendor-questionnaire/) | Python | Uses Web IQ Browse passages to pre-fill a vendor security questionnaire from the vendor's public pages, with short quotes, links, and crawl dates. Prepares the passages as input for your own model without calling one. | No telemetry. Nothing is written to files or logs. |
 | [APIM managed identity gateway](samples/terraform/apim-managed-identity/README.md) | Terraform | Protect Web IQ with Entra authentication, query redaction, and optional operational telemetry. | Azure Monitor telemetry stays in your subscription and is disabled by default. [Collection, retention, and opt-out guidance](samples/terraform/apim-managed-identity/docs/security-and-logging.md#logging). |
+| [Web IQ resource](samples/terraform/webiq-resource/README.md) | Terraform | Create the Web IQ resource in your Azure subscription with the AzAPI provider, then connect its resource ID in the Web IQ portal to get a Web IQ AppID. | The sample adds no telemetry. |
+| [Named scopes (Python)](samples/python/named-scopes/) | Python | Manage named scopes through the Customer Management API, then use an API- or UI-authored scope with the web endpoint. Covers workload authorization, ETag-protected writes, and separate runtime authentication. | No custom telemetry. Management commands print account/scope data to stdout; [review and redact before sharing](samples/python/named-scopes/README.md#errors-and-operational-limits). |
+| [Named scopes (.NET)](samples/dotnet/named-scopes/) | .NET / C# | Manage scopes through the Customer Management API and consume scoped web search with `HttpClient`, certificate-based Entra authentication, or a runtime API key. Includes offline contract tests and links to Learn setup guidance. | No custom telemetry. Management commands print account/scope data to stdout; [review and redact before sharing](samples/dotnet/named-scopes/README.md#errors-privacy-and-validation). |
+| [Named scopes (Rust)](samples/rust/named-scopes/) | Rust | Manage scopes through the Customer Management API and consume scoped web search with `reqwest`, a runtime API key, or optional certificate-based Entra authentication. Includes offline transport tests and links to Learn setup guidance. | No custom telemetry. Management commands print account/scope data to stdout; [review and redact before sharing](samples/rust/named-scopes/README.md#errors-privacy-and-validation). |
 
 Web IQ service-side data handling is separate from sample diagnostics; see the
 [Web IQ privacy guidance](https://learn.microsoft.com/en-us/web-iq/resources/faq#privacy-and-data-handling).
