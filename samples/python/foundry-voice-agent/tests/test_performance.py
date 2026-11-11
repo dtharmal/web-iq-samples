@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import stat
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -37,8 +38,9 @@ def test_allowlist_hashes_ids_and_never_records_content(tmp_path):
     assert records[1]["code"] == "other_error"
     assert logger.status()["error_code"] == "schema_rejected"
     assert logger.status()["dropped"] == 3
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    if sys.platform != "win32":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
 def test_rotation_bounds_retention_and_preserves_private_permissions(tmp_path):
@@ -51,7 +53,9 @@ def test_rotation_bounds_retention_and_preserves_private_permissions(tmp_path):
     logger.close()
     files = list(path.parent.iterdir())
     assert {p.name for p in files} == {"performance.jsonl", "performance.jsonl.1", "performance.jsonl.2"}
-    assert all(p.stat().st_size <= 1000 and stat.S_IMODE(p.stat().st_mode) == 0o600 for p in files)
+    assert all(p.stat().st_size <= 1000 for p in files)
+    if sys.platform != "win32":
+        assert all(stat.S_IMODE(p.stat().st_mode) == 0o600 for p in files)
     assert logger.status()["dropped"] == 0
 
 
@@ -81,6 +85,7 @@ def test_write_failure_is_visible_and_does_not_dump_exception_or_record(tmp_path
     assert "SECRET" not in caplog.text
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Symlink creation requires Windows privileges")
 def test_startup_failure_does_not_follow_symlink(tmp_path):
     target = tmp_path / "untouched"
     target.write_text("PRIVATE_EXISTING_FILE")
